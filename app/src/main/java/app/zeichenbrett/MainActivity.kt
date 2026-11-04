@@ -356,6 +356,9 @@ class MainActivity : Activity(), CanvasView.Host {
 
         docBar = palette(this, true)
         setBar = palette(this, true)
+        setBar.addOnLayoutChangeListener { _, l, _, r, _, ol, _, or2, _ ->
+            if (r - l != or2 - ol) ui.post { rebuildDocBar() }
+        }
         toolBar = palette(this, false)
         imageBar = palette(this, true).apply { visibility = View.GONE }
         val m = dpi(12f)
@@ -550,6 +553,7 @@ class MainActivity : Activity(), CanvasView.Host {
         val box = palette(this, false)
         val d = active
         var longest = 0
+        val rowH = (btnSize * 0.8f).roundToInt()
         for (doc in docs) {
             val b = Btn(this).apply {
                 text = labelText(doc)
@@ -557,15 +561,17 @@ class MainActivity : Activity(), CanvasView.Host {
                 alignLeft = true
                 active = doc === d
                 onTap = { dismissPopup(); activate(doc) }
+                onLong = { dismissPopup(); renameDialog(doc) }
             }
-            b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.makeMeasureSpec(btnSize, View.MeasureSpec.EXACTLY))
+            b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.makeMeasureSpec(rowH, View.MeasureSpec.EXACTLY))
             longest = max(longest, b.measuredWidth)
-            box.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, btnSize))
+            box.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, rowH))
         }
         val minW = docSlot + dpi(4f) + btnSize + box.paddingLeft + box.paddingRight
         val w = max(minW, longest + box.paddingLeft + box.paddingRight).coerceAtMost(docBar.right - dpi(12f))
         val top = docBar.bottom + dpi(8f)
-        val maxH = root.height - top - dpi(12f)
+        var maxH = root.height - top - dpi(12f)
+        if (root.height > root.width) maxH = min(maxH, rowH * 7 + box.paddingTop + box.paddingBottom)
         val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
         box.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED)
         val p = FrameLayout.LayoutParams(w, min(box.measuredHeight, maxH)).apply {
@@ -936,7 +942,7 @@ class MainActivity : Activity(), CanvasView.Host {
             for (r in recent) content.add(row(r.name) { openFile(r.uri, persist = false, fromRecent = true) })
         }
         val cancelable = docs.isNotEmpty()
-        val pnl = showPanel("Zeichenbrett", content, if (cancelable) listOf("Abbrechen" to {}) else emptyList(), cancelable = cancelable)
+        val pnl = showPanel("Klemmbrett", content, if (cancelable) listOf("Abbrechen" to {}) else emptyList(), cancelable = cancelable)
         pnl.overlay.tag = "start"
         panel = pnl
     }
@@ -981,12 +987,27 @@ class MainActivity : Activity(), CanvasView.Host {
     // ================================================================== Einstellungsdialog
 
     private enum class Kind { BLANK, PDF, IMAGE }
-    private class DocSettings(var format: Int, var landscape: Boolean, var dpi: Int, var scale: Int, var unit: MUnit)
+    private class DocSettings(var format: Int, var landscape: Boolean, var dpi: Int, var scale: Int, var unit: MUnit, var name: String = "")
 
     private fun settingsDialog(kind: Kind, title: String, info: String?, init: DocSettings, multi: Boolean, done: (DocSettings?, Boolean) -> Unit) {
         val s = init
         val content = ArrayList<View>()
         if (info != null) content.add(bodyText(info))
+        var nameField: EditText? = null
+        if (kind == Kind.BLANK) {
+            content.add(caption("Name"))
+            val nf = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setText(s.name)
+                textSize = 18f
+                setTextColor(Pal.BLACK)
+                background = outlineBg(this@MainActivity)
+                setPadding(dpi(14f), dpi(8f), dpi(14f), dpi(8f))
+                setSelectAllOnFocus(true)
+            }
+            nameField = nf
+            content.add(nf)
+        }
         if (kind != Kind.PDF) {
             content.add(caption("Format"))
             val names = if (kind == Kind.IMAGE) A_NAMES + "Bildgröße" else A_NAMES
@@ -1002,6 +1023,7 @@ class MainActivity : Activity(), CanvasView.Host {
 
         fun read(): DocSettings {
             s.scale = (et.text.toString().toIntOrNull() ?: s.scale).coerceIn(1, 100000)
+            nameField?.let { s.name = it.text.toString().trim() }
             return s
         }
         val buttons = ArrayList<Pair<String, () -> Unit>>()
@@ -1014,13 +1036,14 @@ class MainActivity : Activity(), CanvasView.Host {
     // ================================================================== Neu / Öffnen
 
     private fun newBlank() {
-        settingsDialog(Kind.BLANK, "Neues Dokument", null, DocSettings(F_A4, false, 150, 100, MUnit.M), false) { s, _ ->
+        val defName = "Unbenannt ${untitled + 1}"
+        settingsDialog(Kind.BLANK, "Neues Dokument", null, DocSettings(F_A4, false, 150, 100, MUnit.M, defName), false) { s, _ ->
             if (s == null) { if (docs.isEmpty()) showStart(); return@settingsDialog }
             val (wmm, hmm) = A_MM[s.format]
             val w = (if (s.landscape) hmm else wmm) * PT_PER_MM
             val h = (if (s.landscape) wmm else hmm) * PT_PER_MM
             untitled++
-            val d = newDoc("Unbenannt $untitled")
+            val d = newDoc(s.name.ifEmpty { defName })
             d.pageW = w; d.pageH = h; d.scale = s.scale; d.unit = s.unit; d.bgColor = Pal.PAPER
             runBusy({
                 PdfIO.createBlank(d.baseFile, w, h)

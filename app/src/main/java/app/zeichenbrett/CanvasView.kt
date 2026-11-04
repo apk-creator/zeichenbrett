@@ -139,14 +139,14 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     /** Mindestzoom nach Seitengröße (Tabelle für A0–A6, dazwischen interpoliert). */
     fun minZoom(d: PageDoc): Float {
         val longMm = max(d.pageW, d.pageH) / PT_PER_MM
-        val t = arrayOf(148f to 0.96f, 210f to 0.69f, 297f to 0.49f, 420f to 0.35f, 594f to 0.25f, 841f to 0.18f, 1189f to 0.05f)
+        val t = arrayOf(148f to 0.96f, 210f to 0.69f, 297f to 0.49f, 420f to 0.35f, 594f to 0.24f, 841f to 0.17f, 1189f to 0.12f)
         if (longMm <= t.first().first) return t.first().second
         if (longMm >= t.last().first) return t.last().second
         for (i in 0 until t.size - 1) {
             val (l0, z0) = t[i]; val (l1, z1) = t[i + 1]
             if (longMm <= l1) return z0 + (z1 - z0) * (longMm - l0) / (l1 - l0)
         }
-        return 0.05f
+        return 0.12f
     }
 
     /** 100 % und Seite mittig auf dem Bildschirm. */
@@ -613,7 +613,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         return super.onHoverEvent(e)
     }
 
-    private fun penBlocksFingers() = penNear || SystemClock.uptimeMillis() - lastPenSeen < 700
+    private fun penBlocksFingers() = penNear || SystemClock.uptimeMillis() - lastPenSeen < 400
 
     private fun isPalm(e: MotionEvent, i: Int): Boolean {
         if (e.getToolType(i) == 5 /* TOOL_TYPE_PALM */) return true

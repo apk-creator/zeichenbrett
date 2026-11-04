@@ -73,7 +73,7 @@ class Btn(ctx: Context) : View(ctx) {
     var onTap: (() -> Unit)? = null
 
     private var down = false
-    /** Tippen und 1 s halten. */
+    /** Tippen und 0,5 s halten. */
     var onLong: (() -> Unit)? = null
     private var longFired = false
     private val longRun = Runnable {
@@ -113,7 +113,7 @@ class Btn(ctx: Context) : View(ctx) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 down = true; longFired = false; invalidate()
-                if (onLong != null) postDelayed(longRun, 1000)
+                if (onLong != null) postDelayed(longRun, 500)
             }
             MotionEvent.ACTION_MOVE -> {
                 val inside = e.x >= 0 && e.y >= 0 && e.x <= width && e.y <= height
@@ -319,9 +319,11 @@ object Icons {
                 c.drawPath(path, p)
             }
             "nobg" -> {
-                // Hintergrund (Plan) durchgestrichen: nur eigene Striche radieren
-                c.drawRect(4f, 4f, 20f, 20f, p)
-                c.drawLine(7f, 9f, 17f, 9f, p); c.drawLine(7f, 12.5f, 14f, 12.5f, p); c.drawLine(7f, 16f, 12f, 16f, p)
+                // Durchgestrichenes Klemmbrett: Hintergrund ignorieren, nur eigene Striche radieren
+                c.drawRoundRect(5f, 4.5f, 19f, 21.5f, 2f, 2f, p)
+                p.style = Paint.Style.FILL
+                c.drawRoundRect(8.5f, 2.5f, 15.5f, 6f, 1.2f, 1.2f, p)
+                p.style = Paint.Style.STROKE
                 p.strokeWidth = 2.4f
                 c.drawLine(2.5f, 21.5f, 21.5f, 2.5f, p)
             }

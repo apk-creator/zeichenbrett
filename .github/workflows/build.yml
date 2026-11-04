@@ -30,8 +30,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk zeichenbrett.apk
+          cp app/build/outputs/apk/release/app-release.apk klemmbrett.apk
           gh release delete latest -y --cleanup-tag || true
-          gh release create latest zeichenbrett.apk \
-            --title "Zeichenbrett Build ${{ github.run_number }}" \
+          gh release create latest klemmbrett.apk \
+            --title "Klemmbrett Build ${{ github.run_number }}" \
             --notes "Automatischer Build von ${{ github.sha }}"
