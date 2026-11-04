@@ -70,6 +70,7 @@ class MainActivity : Activity(), CanvasView.Host {
 
     private lateinit var prefs: SharedPreferences
     private lateinit var root: FrameLayout
+    private lateinit var stage: FrameLayout
     private lateinit var canvasView: CanvasView
     private lateinit var docBar: LinearLayout
     private lateinit var toolBar: LinearLayout
@@ -305,8 +306,7 @@ class MainActivity : Activity(), CanvasView.Host {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
         val r = dp(10f)
         val effect = if (panels.isNotEmpty()) android.graphics.RenderEffect.createBlurEffect(r, r, android.graphics.Shader.TileMode.CLAMP) else null
-        for (v in listOf<View>(canvasView, docBar, setBar, toolBar, imageBar)) v.setRenderEffect(effect)
-        popup?.setRenderEffect(effect)
+        stage.setRenderEffect(effect)
     }
 
     /** Auswahlzeile aus Buttons; die gewählte Option ist invertiert. */
@@ -349,18 +349,20 @@ class MainActivity : Activity(), CanvasView.Host {
     private fun buildUi() {
         root = FrameLayout(this)
         root.setBackgroundColor(Pal.BACKGROUND)
+        stage = FrameLayout(this)
+        root.addView(stage, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         canvasView = CanvasView(this, tools, this)
-        root.addView(canvasView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        stage.addView(canvasView, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         docBar = palette(this, true)
         setBar = palette(this, true)
         toolBar = palette(this, false)
         imageBar = palette(this, true).apply { visibility = View.GONE }
         val m = dpi(12f)
-        root.addView(docBar, lp(Gravity.TOP or Gravity.START, m, m, 0, 0))
-        root.addView(setBar, lp(Gravity.TOP or Gravity.END, 0, m, m, 0))
-        root.addView(toolBar, lp(Gravity.CENTER_VERTICAL or Gravity.START, m, 0, 0, 0))
-        root.addView(imageBar, lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, dpi(96f), 0, 0))
+        stage.addView(docBar, lp(Gravity.TOP or Gravity.START, m, m, 0, 0))
+        stage.addView(setBar, lp(Gravity.TOP or Gravity.END, 0, m, m, 0))
+        stage.addView(toolBar, lp(Gravity.CENTER_VERTICAL or Gravity.START, m, 0, 0, 0))
+        stage.addView(imageBar, lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, dpi(96f), 0, 0))
         setContentView(root)
         buildBars()
         root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or2, ob ->
@@ -380,7 +382,7 @@ class MainActivity : Activity(), CanvasView.Host {
         val screenW = if (root.width > 0) root.width else dm.widthPixels
         // Einstellungspalette ≈ 1/3 der Breite: 5 Symbolbuttons (je 1,25) + 3 breite Textbuttons (je 1,6)
         val unit = ((screenW / 3f - dp(8f)) / 11.05f).roundToInt()
-        btnSize = unit.coerceIn(dpi(40f), dpi(56f))
+        btnSize = (unit * 1.25f).roundToInt().coerceIn(dpi(50f), dpi(70f))
 
         // Werkzeugpalette: Messen, Lineal, 5 Stifte, Radierer
         toolBar.removeAllViews(); toolBtns.clear()
@@ -395,12 +397,12 @@ class MainActivity : Activity(), CanvasView.Host {
 
         // Einstellungspalette: Zurück, Vor, Zoom, Rotation, Maßstab, Import, Speichern, Schließen
         setBar.removeAllViews()
-        val wide = (btnSize * 1.6f).roundToInt()
+        val wide = (btnSize * 1.75f).roundToInt()
         bUndo = Btn(this).apply { icon = "undo"; onTap = { doUndo(true) } }
         bRedo = Btn(this).apply { icon = "redo"; onTap = { doUndo(false) } }
-        bZoom = Btn(this).apply { text = "100 %"; onTap = { zoomTap() } }
-        bRot = Btn(this).apply { text = "0°"; onTap = { rotTap() } }
-        bScale = Btn(this).apply { text = "1:100"; onTap = { scaleDialog() } }
+        bZoom = Btn(this).apply { text = "100 %"; textSp = 16f; badgeSpace = true; onTap = { zoomTap() } }
+        bRot = Btn(this).apply { text = "0°"; textSp = 16f; badgeSpace = true; onTap = { rotTap() } }
+        bScale = Btn(this).apply { text = "1:100"; textSp = 16f; onTap = { scaleDialog() } }
         bImport = Btn(this).apply { icon = "import"; onTap = { startImport() } }
         bSave = Btn(this).apply { icon = "save"; onTap = { this@MainActivity.active?.let { saveDoc(it, null) } } }
         bClose = Btn(this).apply { icon = "close"; onTap = { this@MainActivity.active?.let { closeDoc(it) } } }
@@ -418,7 +420,10 @@ class MainActivity : Activity(), CanvasView.Host {
             "orig" to { editSelection { _, im -> origBox(im) } },
             "center" to { editSelection { d, im -> im.copy(x = (d.pageW - im.w) / 2f, y = (d.pageH - im.h) / 2f) } },
             "check" to { fixSelection() },
-        )) imageBar.addView(Btn(this).apply { icon = ic; onTap = f }, LinearLayout.LayoutParams(iconW, btnSize))
+        )) imageBar.addView(Btn(this).apply {
+            if (ic == "orig") { text = "1:1"; textSp = 16f } else icon = ic
+            onTap = f
+        }, LinearLayout.LayoutParams(iconW, btnSize))
     }
 
     private fun fmtWidth(v: Float) = if (v < 1f) String.format(Locale.US, "%.2f", v) else String.format(Locale.US, "%.1f", v)
@@ -485,6 +490,7 @@ class MainActivity : Activity(), CanvasView.Host {
         for (doc in shown) {
             val b = Btn(this).apply {
                 text = labelText(doc)
+                textSp = 16f
                 multiLine = true
                 alignLeft = true
                 active = doc === d
@@ -506,17 +512,21 @@ class MainActivity : Activity(), CanvasView.Host {
     private fun showDocDropdown() {
         val box = palette(this, false)
         val d = active
+        var longest = 0
         for (doc in docs) {
             val b = Btn(this).apply {
                 text = labelText(doc)
-                multiLine = true
+                textSp = 16f
                 alignLeft = true
                 active = doc === d
                 onTap = { dismissPopup(); activate(doc) }
             }
+            b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.makeMeasureSpec(btnSize, View.MeasureSpec.EXACTLY))
+            longest = max(longest, b.measuredWidth)
             box.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, btnSize))
         }
-        val w = docSlot + dpi(4f) + btnSize + box.paddingLeft + box.paddingRight
+        val minW = docSlot + dpi(4f) + btnSize + box.paddingLeft + box.paddingRight
+        val w = max(minW, longest + box.paddingLeft + box.paddingRight).coerceAtMost(docBar.right - dpi(12f))
         val top = docBar.bottom + dpi(8f)
         val maxH = root.height - top - dpi(12f)
         val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
@@ -545,10 +555,10 @@ class MainActivity : Activity(), CanvasView.Host {
         if (withCatcher) {
             val c = View(this)
             c.setOnClickListener { dismissPopup() }
-            root.addView(c, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            stage.addView(c, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             catcher = c
         }
-        root.addView(v, p)
+        stage.addView(v, p)
         if (key == -2) docBar.bringToFront()
         popup = v
         popupFor = key
@@ -556,8 +566,8 @@ class MainActivity : Activity(), CanvasView.Host {
 
     private fun dismissPopup() {
         val wasDocs = popupFor == -2
-        popup?.let { root.removeView(it) }
-        catcher?.let { root.removeView(it) }
+        popup?.let { stage.removeView(it) }
+        catcher?.let { stage.removeView(it) }
         popup = null; catcher = null; popupFor = -1
         if (wasDocs) rebuildDocBar()
     }
@@ -598,6 +608,8 @@ class MainActivity : Activity(), CanvasView.Host {
 
     private fun showToolPopup(k: Int) {
         val box = palette(this, true)
+        var prevX = 0f
+        var prevBottom = 0f
         if (k == T_MEASURE) {
             val d = active ?: return
             for (u in MUnit.values()) {
@@ -622,7 +634,7 @@ class MainActivity : Activity(), CanvasView.Host {
                     tools.eraserPct = v.roundToInt().toFloat().coerceIn(1f, 100f)
                     label.text = "${tools.eraserPct.roundToInt()} %"
                     toolBtns[T_ERASER].text = label.text
-                    canvasView.showSizePreview(null, canvasView.eraserPxFor(tools.eraserPct))
+                    canvasView.showSizePreview(null, canvasView.eraserPxFor(tools.eraserPct), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() })
             } else {
                 val idx = k - T_PEN0
@@ -631,7 +643,7 @@ class MainActivity : Activity(), CanvasView.Host {
                     tools.penWidth[idx] = (v * 100f).roundToInt() / 100f
                     label.text = fmtWidth(tools.penWidth[idx]) + " pt"
                     toolBtns[k].text = fmtWidth(tools.penWidth[idx])
-                    canvasView.showSizePreview(Pal.PENS[idx], canvasView.penPx(tools.penWidth[idx]))
+                    canvasView.showSizePreview(Pal.PENS[idx], canvasView.penPx(tools.penWidth[idx]), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() })
             }
             box.addView(slider, LinearLayout.LayoutParams(dpi(360f), btnSize))
@@ -650,44 +662,41 @@ class MainActivity : Activity(), CanvasView.Host {
             leftMargin = toolBar.right + dpi(8f)
             topMargin = toolBar.top + btn.top + btn.height / 2 - (btnSize + toolBar.paddingTop * 2) / 2
         }
+        prevX = (p.leftMargin + box.paddingLeft + dpi(180f)).toFloat()
+        prevBottom = p.topMargin.toFloat()
         showPopup(box, p, k, withCatcher = false)
     }
 
-    private var zoomTapPending: Runnable? = null
-    private var rotTapPending: Runnable? = null
+    private var zoomLastTap = 0L
+    private var rotLastTap = 0L
 
+    /** Einfacher Tipp: Sperre sofort umschalten. Doppeltipp: Sperre zurück und (falls frei) auf 100 % / 0°. */
     private fun zoomTap() {
-        val pend = zoomTapPending
-        if (pend != null) {
-            ui.removeCallbacks(pend)
-            zoomTapPending = null
-            if (!tools.zoomLocked) canvasView.setZoom(1f)
-            return
-        }
-        val r = Runnable {
-            zoomTapPending = null
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - zoomLastTap < 300) {
+            zoomLastTap = 0L
             tools.zoomLocked = !tools.zoomLocked
-            refreshUi()
+            if (!tools.zoomLocked) canvasView.setZoom(1f)
+            bZoom.flash()
+        } else {
+            zoomLastTap = now
+            tools.zoomLocked = !tools.zoomLocked
         }
-        zoomTapPending = r
-        ui.postDelayed(r, 280)
+        refreshUi()
     }
 
     private fun rotTap() {
-        val pend = rotTapPending
-        if (pend != null) {
-            ui.removeCallbacks(pend)
-            rotTapPending = null
-            if (!tools.rotLocked) canvasView.setPlanRotation(0f)
-            return
-        }
-        val r = Runnable {
-            rotTapPending = null
+        val now = android.os.SystemClock.uptimeMillis()
+        if (now - rotLastTap < 300) {
+            rotLastTap = 0L
             tools.rotLocked = !tools.rotLocked
-            refreshUi()
+            if (!tools.rotLocked) canvasView.setPlanRotation(0f)
+            bRot.flash()
+        } else {
+            rotLastTap = now
+            tools.rotLocked = !tools.rotLocked
         }
-        rotTapPending = r
-        ui.postDelayed(r, 280)
+        refreshUi()
     }
 
     private fun doUndo(undo: Boolean) {
@@ -1168,9 +1177,24 @@ class MainActivity : Activity(), CanvasView.Host {
         if (d.selectedImage != null) {
             if (active === d) fixSelection() else d.selectedImage = null
         }
-        if (d.items.any { it is ImageItem }) {
-            dpiDialog(d.dpi) { dpi -> d.dpi = dpi; saveDoc2(d, dpi, after) }
-        } else saveDoc2(d, d.dpi, after)
+        val canOverwrite = d.sourceUri != null && d.writable && !d.fromMulti
+        fun go(asNew: Boolean) {
+            if (d.items.any { it is ImageItem }) {
+                dpiDialog(d.dpi) { dpi -> d.dpi = dpi; saveDoc2(d, dpi, after, asNew) }
+            } else saveDoc2(d, d.dpi, after, asNew)
+        }
+        val buttons = ArrayList<Pair<String, () -> Unit>>()
+        buttons.add("Abbrechen" to {})
+        if (canOverwrite) buttons.add("Dokument überschreiben" to { go(false) })
+        buttons.add("Speichern unter" to { go(true) })
+        showPanel(
+            "„${d.title}“ speichern",
+            listOf(bodyText(if (canOverwrite) "Die geöffnete Datei überschreiben oder als neue Datei speichern?"
+                else "Diese Seite hat noch keine eigene Datei. Sie wird als neue PDF gespeichert.")),
+            buttons,
+            cancelable = true,
+            widthPx = dpi(600f),
+        )
     }
 
     private fun dpiDialog(current: Int, done: (Int) -> Unit) {
@@ -1186,9 +1210,9 @@ class MainActivity : Activity(), CanvasView.Host {
         )
     }
 
-    private fun saveDoc2(d: PageDoc, dpi: Int, after: (() -> Unit)?) {
+    private fun saveDoc2(d: PageDoc, dpi: Int, after: (() -> Unit)?, asNew: Boolean) {
         val uri = d.sourceUri
-        if (uri == null || !d.writable || d.fromMulti) {
+        if (asNew || uri == null || !d.writable || d.fromMulti) {
             pendingSave = PendingSave(d, dpi, after)
             val i = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)

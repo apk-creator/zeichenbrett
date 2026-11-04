@@ -3,7 +3,7 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_launcher"
+        android:icon="@mipmap/ic_launcher"
         android:label="Zeichenbrett"
         android:largeHeap="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">

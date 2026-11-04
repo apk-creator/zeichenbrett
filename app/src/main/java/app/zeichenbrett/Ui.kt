@@ -58,6 +58,8 @@ class Btn(ctx: Context) : View(ctx) {
         set(v) { field = v; requestLayout(); invalidate() }
     var badge: String? = null
         set(v) { field = v; invalidate() }
+    /** Platz für das Badge immer freihalten, damit der Text nicht springt. */
+    var badgeSpace = false
     var active = false
         set(v) { field = v; invalidate() }
     var enabledBtn = true
@@ -92,7 +94,7 @@ class Btn(ctx: Context) : View(ctx) {
             if (tx != null && icon == null) {
                 tp.textSize = textSize(h.toFloat())
                 tp.isFakeBoldText = bold
-                var want = (tp.measureText(tx) + 2 * pad + (if (badge != null) h * 0.4f else 0f)).toInt()
+                var want = (tp.measureText(tx) + 2 * pad + (if (badge != null || badgeSpace) h * 0.4f else 0f)).toInt()
                 if (wMode == MeasureSpec.AT_MOST) want = minOf(want, MeasureSpec.getSize(widthMeasureSpec))
                 max(want, h)
             } else h
@@ -152,12 +154,12 @@ class Btn(ctx: Context) : View(ctx) {
         var x0 = pad
         var avail = w - 2 * pad
         val b = badge
-        if (b != null) {
+        if (b != null || badgeSpace) {
             val isz = h * 0.34f
             val tw = tp.measureText(tx)
             val total = isz + context.dp(4f) + tw
             val bx = if (alignLeft) pad else (w - total) / 2f
-            Icons.draw(c, b, bx + isz / 2f, h / 2f, isz, tp.color, null, p)
+            if (b != null) Icons.draw(c, b, bx + isz / 2f, h / 2f, isz, tp.color, null, p)
             x0 = bx + isz + context.dp(4f)
             avail = w - x0 - pad
             tp.textAlign = Paint.Align.LEFT
@@ -310,12 +312,10 @@ object Icons {
                 c.drawPath(path, p)
             }
             "fit" -> {
-                c.drawRect(3f, 5f, 21f, 19f, p)
-                path.moveTo(7f, 9f); path.lineTo(7f, 15f)
-                path.moveTo(17f, 9f); path.lineTo(17f, 15f)
-                path.moveTo(9.5f, 12f); path.lineTo(14.5f, 12f)
-                path.moveTo(11.5f, 10f); path.lineTo(9.5f, 12f); path.lineTo(11.5f, 14f)
-                path.moveTo(12.5f, 10f); path.lineTo(14.5f, 12f); path.lineTo(12.5f, 14f)
+                // Rechteck, proportional gefüllt von einem um 45° gedrehten Quadrat
+                c.drawRect(2.5f, 5.5f, 21.5f, 18.5f, p)
+                path.moveTo(12f, 5.5f); path.lineTo(18.5f, 12f); path.lineTo(12f, 18.5f); path.lineTo(5.5f, 12f); path.close()
+                p.style = Paint.Style.FILL
                 c.drawPath(path, p)
             }
             "orig" -> {
@@ -327,10 +327,12 @@ object Icons {
                 c.drawCircle(12f, 14.5f, 1.3f, p)
             }
             "center" -> {
-                c.drawRect(3f, 3f, 21f, 21f, p)
-                c.drawCircle(12f, 12f, 3.5f, p)
-                c.drawLine(12f, 6f, 12f, 8.5f, p); c.drawLine(12f, 15.5f, 12f, 18f, p)
-                c.drawLine(6f, 12f, 8.5f, 12f, p); c.drawLine(15.5f, 12f, 18f, 12f, p)
+                // Vier Pfeile, die zur Mitte zeigen
+                path.moveTo(12f, 2.5f); path.lineTo(12f, 9.5f); path.moveTo(9.5f, 7f); path.lineTo(12f, 9.5f); path.lineTo(14.5f, 7f)
+                path.moveTo(12f, 21.5f); path.lineTo(12f, 14.5f); path.moveTo(9.5f, 17f); path.lineTo(12f, 14.5f); path.lineTo(14.5f, 17f)
+                path.moveTo(2.5f, 12f); path.lineTo(9.5f, 12f); path.moveTo(7f, 9.5f); path.lineTo(9.5f, 12f); path.lineTo(7f, 14.5f)
+                path.moveTo(21.5f, 12f); path.lineTo(14.5f, 12f); path.moveTo(17f, 9.5f); path.lineTo(14.5f, 12f); path.lineTo(17f, 14.5f)
+                c.drawPath(path, p)
             }
             "rotate" -> {
                 c.rotate(90f, 12f, 12f)

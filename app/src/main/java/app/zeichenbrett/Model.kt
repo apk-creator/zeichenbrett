@@ -15,7 +15,7 @@ object Pal {
     val BACKGROUND = Color.rgb(215, 215, 215)
     val PAPER = Color.rgb(250, 250, 250)
     val BLACK = Color.rgb(5, 5, 5)
-    val WHITE = Color.rgb(250, 250, 250)
+    val WHITE = Color.rgb(245, 245, 245)
     val GREY = Color.rgb(140, 140, 140)
 
     /** Weiß, Schwarz, Rot, Grün, Blau – Reihenfolge der Werkzeugpalette. */

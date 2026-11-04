@@ -354,11 +354,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
 
         sizePreview?.let { (color, dia) ->
-            val cx = width / 2f; val cy = height * 0.25f
             val r = max(dia / 2f, 0.5f)
-            val bgR = max(r + 16f * dens, 36f * dens)
-            fillP.color = Pal.WHITE
-            c.drawRoundRect(cx - bgR, cy - bgR, cx + bgR, cy + bgR, 16f * dens, 16f * dens, fillP)
+            val cx = previewX; val cy = previewBottom - r - 10f * dens
             if (color == null) {
                 strokeP.color = Pal.BLACK; strokeP.strokeWidth = 1.5f * dens
                 c.drawCircle(cx, cy, r, strokeP)
@@ -395,7 +392,13 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     /** Größenvorschau beim Verstellen des Reglers: Farbe (null = Radierer-Umriss) und Durchmesser in px. */
     private var sizePreview: Pair<Int?, Float>? = null
 
-    fun showSizePreview(color: Int?, diameterPx: Float) { sizePreview = color to diameterPx; invalidate() }
+    private var previewX = 0f
+    private var previewBottom = 0f
+
+    /** Vorschau mittig über dem Regler: x = Mitte, bottom = Unterkante des freien Bereichs. */
+    fun showSizePreview(color: Int?, diameterPx: Float, x: Float, bottom: Float) {
+        sizePreview = color to diameterPx; previewX = x; previewBottom = bottom; invalidate()
+    }
     fun hideSizePreview() { sizePreview = null; invalidate() }
     fun penPx(widthPt: Float): Float = doc?.let { widthPt * scaleOf(it) } ?: widthPt * pxPerPt()
     fun eraserPxFor(pct: Float): Float = pct / 100f * 0.25f * min(width, height)
@@ -960,7 +963,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (onRulerG) {
                 tools.rulerX = g0rx + cx - g0cx
                 tools.rulerY = g0ry + cy - g0cy
-                tools.rulerAngle = snapTo(g0ra + angleDiff(ang, g0ang), 15f, 3f)
+                tools.rulerAngle = snapTo(g0ra + angleDiff(ang, g0ang), 15f, 3f).roundToInt().toFloat() % 360f
                 host.refreshStatus()
                 invalidate()
                 return
