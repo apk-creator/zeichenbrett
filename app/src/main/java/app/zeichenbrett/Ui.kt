@@ -73,6 +73,12 @@ class Btn(ctx: Context) : View(ctx) {
     var onTap: (() -> Unit)? = null
 
     private var down = false
+    /** Tippen und 1 s halten. */
+    var onLong: (() -> Unit)? = null
+    private var longFired = false
+    private val longRun = Runnable {
+        if (down) { longFired = true; down = false; invalidate(); onLong?.invoke() }
+    }
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
     private val pad = ctx.dp(12f)
@@ -105,17 +111,21 @@ class Btn(ctx: Context) : View(ctx) {
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
-            MotionEvent.ACTION_DOWN -> { down = true; invalidate() }
+            MotionEvent.ACTION_DOWN -> {
+                down = true; longFired = false; invalidate()
+                if (onLong != null) postDelayed(longRun, 1000)
+            }
             MotionEvent.ACTION_MOVE -> {
                 val inside = e.x >= 0 && e.y >= 0 && e.x <= width && e.y <= height
-                if (inside != down) { down = inside; invalidate() }
+                if (inside != down) { down = inside; invalidate(); if (!inside) removeCallbacks(longRun) }
             }
             MotionEvent.ACTION_UP -> {
                 val was = down
                 down = false; invalidate()
-                if (was && enabledBtn) onTap?.invoke()
+                removeCallbacks(longRun)
+                if (was && enabledBtn && !longFired) onTap?.invoke()
             }
-            MotionEvent.ACTION_CANCEL -> { down = false; invalidate() }
+            MotionEvent.ACTION_CANCEL -> { down = false; removeCallbacks(longRun); invalidate() }
         }
         return true
     }
@@ -124,12 +134,13 @@ class Btn(ctx: Context) : View(ctx) {
         val w = width.toFloat(); val h = height.toFloat()
         val inv = active || (down && enabledBtn)
         if (inv) {
-            p.style = Paint.Style.FILL; p.color = Pal.ACTIVE_BG
+            // Aktiv bzw. gedrückt: nur schwarz umrahmt
+            val sw = context.dp(1.8f)
+            p.style = Paint.Style.STROKE; p.strokeWidth = sw; p.color = Pal.BLACK
             val r = context.dp(R_BUTTON)
-            c.drawRoundRect(1f, 1f, w - 1f, h - 1f, r, r, p)
+            c.drawRoundRect(sw / 2f + 1f, sw / 2f + 1f, w - sw / 2f - 1f, h - sw / 2f - 1f, r, r, p)
         }
         val fg = when {
-            inv -> Pal.ACTIVE_FG
             !enabledBtn || grey -> Pal.GREY
             else -> Pal.BLACK
         }

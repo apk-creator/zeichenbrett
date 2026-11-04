@@ -397,7 +397,7 @@ class MainActivity : Activity(), CanvasView.Host {
 
         // Einstellungspalette: Zurück, Vor, Zoom, Rotation, Maßstab, Import, Speichern, Schließen
         setBar.removeAllViews()
-        val wide = (btnSize * 1.75f).roundToInt()
+        val wide = (btnSize * 1.6f).roundToInt()
         bUndo = Btn(this).apply { icon = "undo"; onTap = { doUndo(true) } }
         bRedo = Btn(this).apply { icon = "redo"; onTap = { doUndo(false) } }
         bZoom = Btn(this).apply { text = "100 %"; textSp = 16f; badgeSpace = true; onTap = { zoomTap() } }
@@ -406,10 +406,13 @@ class MainActivity : Activity(), CanvasView.Host {
         bImport = Btn(this).apply { icon = "import"; onTap = { startImport() } }
         bSave = Btn(this).apply { icon = "save"; onTap = { this@MainActivity.active?.let { saveDoc(it, null) } } }
         bClose = Btn(this).apply { icon = "close"; onTap = { this@MainActivity.active?.let { closeDoc(it) } } }
-        val iconW = (btnSize * 1.25f).roundToInt()
-        for (b in listOf(bUndo, bRedo)) setBar.addView(b, LinearLayout.LayoutParams(iconW, btnSize))
-        for (b in listOf(bZoom, bRot, bScale)) setBar.addView(b, LinearLayout.LayoutParams(wide, btnSize))
-        for (b in listOf(bImport, bSave, bClose)) setBar.addView(b, LinearLayout.LayoutParams(iconW, btnSize))
+        val iconW = (btnSize * 1.1f).roundToInt()
+        val gapS = dpi(4f)
+        val all = listOf(bUndo, bRedo, bZoom, bRot, bScale, bImport, bSave, bClose)
+        for ((i, b) in all.withIndex()) {
+            val w = if (b === bZoom || b === bRot || b === bScale) wide else iconW
+            setBar.addView(b, LinearLayout.LayoutParams(w, btnSize).apply { if (i < all.size - 1) marginEnd = gapS })
+        }
 
         // Bildleiste
         imageBar.removeAllViews()
@@ -477,8 +480,8 @@ class MainActivity : Activity(), CanvasView.Host {
         val rw = if (root.width > 0) root.width else resources.displayMetrics.widthPixels
         val sw = if (setBar.width > 0) setBar.width else rw / 3
         // App-Zeichen links, dann 5 Label + 1 Button (Dropdown bzw. „+“) bis an die Einstellungspalette
-        val markH = (btnSize * 0.8f).roundToInt()
-        val markW = (markH * 46f / 62f).roundToInt()
+        val markH = (btnSize * 0.68f).roundToInt()
+        val markW = (markH * 52f / 62f).roundToInt()
         docBar.addView(android.widget.ImageView(this).apply {
             setImageResource(R.drawable.ic_app_mark)
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
@@ -500,6 +503,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 alignLeft = true
                 active = doc === d
                 onTap = { activate(doc) }
+                onLong = { renameDialog(doc) }
             }
             docBar.addView(b, LinearLayout.LayoutParams(slot, btnSize).apply { marginEnd = gap })
         }
@@ -512,6 +516,31 @@ class MainActivity : Activity(), CanvasView.Host {
             docArrow = arrow
             docBar.addView(arrow, LinearLayout.LayoutParams(btnSize, btnSize))
         }
+    }
+
+    private fun renameDialog(d: PageDoc) {
+        val et = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(d.title)
+            textSize = 18f
+            setTextColor(Pal.BLACK)
+            background = outlineBg(this@MainActivity)
+            setPadding(dpi(14f), dpi(10f), dpi(14f), dpi(10f))
+            setSelectAllOnFocus(true)
+        }
+        showPanel(
+            "Umbenennen",
+            listOf(et),
+            listOf(
+                "Abbrechen" to {},
+                "OK" to {
+                    val t = et.text.toString().trim()
+                    if (t.isNotEmpty() && t != d.title) { d.title = t; refreshUi() }
+                },
+            ),
+            cancelable = true,
+        )
+        et.requestFocus()
     }
 
     private fun showDocDropdown() {
@@ -683,7 +712,7 @@ class MainActivity : Activity(), CanvasView.Host {
         if (now - zoomLastTap < 300) {
             zoomLastTap = 0L
             tools.zoomLocked = !tools.zoomLocked
-            if (!tools.zoomLocked) canvasView.setZoom(1f)
+            if (!tools.zoomLocked) canvasView.zoom100Centered()
             bZoom.flash()
         } else {
             zoomLastTap = now

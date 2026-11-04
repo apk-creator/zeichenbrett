@@ -136,6 +136,27 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         requestHiRes()
     }
 
+    /** Mindestzoom nach Seitengröße (Tabelle für A0–A6, dazwischen interpoliert). */
+    fun minZoom(d: PageDoc): Float {
+        val longMm = max(d.pageW, d.pageH) / PT_PER_MM
+        val t = arrayOf(148f to 0.96f, 210f to 0.69f, 297f to 0.49f, 420f to 0.35f, 594f to 0.25f, 841f to 0.18f, 1189f to 0.05f)
+        if (longMm <= t.first().first) return t.first().second
+        if (longMm >= t.last().first) return t.last().second
+        for (i in 0 until t.size - 1) {
+            val (l0, z0) = t[i]; val (l1, z1) = t[i + 1]
+            if (longMm <= l1) return z0 + (z1 - z0) * (longMm - l0) / (l1 - l0)
+        }
+        return 0.05f
+    }
+
+    /** 100 % und Seite mittig auf dem Bildschirm. */
+    fun zoom100Centered() {
+        val d = doc ?: return
+        d.zoom = 1f
+        place(d, d.pageW / 2f, d.pageH / 2f, width / 2f, height / 2f)
+        viewChanged()
+    }
+
     fun setZoom(z: Float) {
         val d = doc ?: return
         val c = toDoc(d, width / 2f, height / 2f)
@@ -344,9 +365,21 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 m.mapPoints(ps)
                 strokeP.color = Pal.BLACK; strokeP.strokeWidth = 1.5f * dens
                 c.drawLine(ps[0], ps[1], ps[2], ps[3], strokeP)
-                fillP.color = Pal.BLACK
-                c.drawCircle(ps[0], ps[1], 3f * dens, fillP)
-                c.drawCircle(ps[2], ps[3], 3f * dens, fillP)
+                // Enden wie im Messsymbol: Querstrich und Pfeilspitze nach außen
+                val len = hypot(ps[2] - ps[0], ps[3] - ps[1])
+                if (len > 1f) {
+                    val ux = (ps[2] - ps[0]) / len; val uy = (ps[3] - ps[1]) / len
+                    val nx = -uy; val ny = ux
+                    val bar = 10f * dens; val ah = 9f * dens; val aw = 5f * dens
+                    for ((ex, ey, dirx, diry) in listOf(
+                        floatArrayOf(ps[0], ps[1], -ux, -uy), floatArrayOf(ps[2], ps[3], ux, uy),
+                    ).map { listOf(it[0], it[1], it[2], it[3]) }) {
+                        c.drawLine(ex - nx * bar, ey - ny * bar, ex + nx * bar, ey + ny * bar, strokeP)
+                        val bx = ex - dirx * ah; val by = ey - diry * ah
+                        c.drawLine(ex, ey, bx + nx * aw, by + ny * aw, strokeP)
+                        c.drawLine(ex, ey, bx - nx * aw, by - ny * aw, strokeP)
+                    }
+                }
                 measureText?.let { t -> label(c, t, (ps[0] + ps[2]) / 2f, (ps[1] + ps[3]) / 2f) }
             }
         }
@@ -922,7 +955,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     /** Fang nur bei schneller Drehung (°/s), langsam lassen sich alle ganzen Grad einstellen. */
     private fun snapIfFast(raw: Float, step: Float): Float =
-        if (angSpeed > 90f) snapTo(raw, step, 3f) else ((raw % 360f) + 360f) % 360f
+        if (angSpeed > 35f) snapTo(raw, step, 3f) else ((raw % 360f) + 360f) % 360f
     private var g0cx = 0f; private var g0cy = 0f; private var g0span = 1f; private var g0ang = 0f
     private var g0zoom = 1f; private var g0rot = 0f; private var g0px = 0f; private var g0py = 0f
     private var g0rx = 0f; private var g0ry = 0f; private var g0ra = 0f
@@ -1010,7 +1043,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 return
             }
             if (!tools.zoomLocked) {
-                var z = (g0zoom * span / g0span).coerceIn(0.15f, 30f)
+                var z = (g0zoom * span / g0span).coerceIn(minZoom(d), 30f)
                 if (abs(z - 1f) <= 0.03f) z = 1f
                 d.zoom = z
             }

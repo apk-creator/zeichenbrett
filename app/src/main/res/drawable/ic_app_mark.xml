@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Klemmbrett aus dem App-Icon, ohne Hintergrund (Titelleiste) -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="46dp" android:height="62dp"
-    android:viewportWidth="46" android:viewportHeight="62">
+    android:width="52dp" android:height="62dp"
+    android:viewportWidth="52" android:viewportHeight="62">
     <group android:translateX="-31" android:translateY="-22">
         <path android:fillColor="#F5F5F5" android:strokeColor="#050505" android:strokeWidth="2"
             android:pathData="M38,28h32a5,5 0,0 1,5 5v44a5,5 0,0 1,-5 5h-32a5,5 0,0 1,-5 -5v-44a5,5 0,0 1,5 -5z" />
