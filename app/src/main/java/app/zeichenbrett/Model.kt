@@ -184,6 +184,11 @@ class PageDoc(val id: String, val workDir: File) {
         return true
     }
 
+    /** Letzten Redo-Eintrag verwerfen (nach einem intern zurückgenommenen Schritt). */
+    fun redoClearLast() {
+        if (redoStack.isNotEmpty()) redoStack.removeLast()
+    }
+
     fun redo(): Boolean {
         if (redoStack.isEmpty()) return false
         undoStack.addLast(items)

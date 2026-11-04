@@ -551,7 +551,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     // ------------------------------------------------------------------ Eingabe
 
-    private enum class Mode { NONE, PEN, FINGER }
+    private enum class Mode { NONE, PEN, FINGER, IGNORE }
     private enum class PenAct { NONE, DRAW, ERASE, MEASURE, MOVE, SCALE }
 
     private var mode = Mode.NONE
@@ -592,49 +592,124 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         e.getToolType(i) == MotionEvent.TOOL_TYPE_ERASER ||
             (e.buttonState and (MotionEvent.BUTTON_STYLUS_PRIMARY or MotionEvent.BUTTON_SECONDARY)) != 0
 
+    // ---- Handballenerkennung
+    // 1) Schwebt der S Pen über dem Display (oder war er gerade dort), werden Finger ignoriert.
+    // 2) Große Kontaktflächen (> 12 mm) bzw. vom System als Handballen markierte Kontakte werden ignoriert.
+    // 3) Bricht das System eine Berührung als Handballen ab, wird die Ansicht zurückgesetzt.
+    // 4) Setzt der Stift kurz nach einer Fingerberührung auf, wird deren Verschiebung rückgängig gemacht.
+
+    private var penNear = false
+    private var lastPenSeen = 0L
+    private var fingerStartT = 0L
+
+    override fun onHoverEvent(e: MotionEvent): Boolean {
+        if (isPen(e, 0)) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_HOVER_ENTER, MotionEvent.ACTION_HOVER_MOVE -> penNear = true
+                MotionEvent.ACTION_HOVER_EXIT -> penNear = false
+            }
+            lastPenSeen = SystemClock.uptimeMillis()
+        }
+        return super.onHoverEvent(e)
+    }
+
+    private fun penBlocksFingers() = penNear || SystemClock.uptimeMillis() - lastPenSeen < 700
+
+    private fun isPalm(e: MotionEvent, i: Int): Boolean {
+        if (e.getToolType(i) == 5 /* TOOL_TYPE_PALM */) return true
+        val limit = host.ppi() / 25.4f * 12f
+        return max(e.getTouchMajor(i), e.getToolMajor(i)) > limit
+    }
+
+    private fun anyPalm(e: MotionEvent): Boolean {
+        for (i in 0 until e.pointerCount) if (!isPen(e, i) && isPalm(e, i)) return true
+        return false
+    }
+
+    private fun canceledByPalm(e: MotionEvent): Boolean =
+        android.os.Build.VERSION.SDK_INT >= 33 && (e.flags and MotionEvent.FLAG_CANCELED) != 0
+
+    /** Ansicht auf den Stand vor der Fingerberührung zurücksetzen und ab jetzt ignorieren. */
+    private fun rejectFingers(d: PageDoc) {
+        if (mode == Mode.FINGER) {
+            if (d.zoom != tapZoom || d.rot != tapRot || d.offX != tapOffX || d.offY != tapOffY) {
+                d.zoom = tapZoom; d.rot = tapRot; d.offX = tapOffX; d.offY = tapOffY
+                viewChanged()
+            }
+            if (imgRotG) { imgRotG = false; d.undo(); d.redoClearLast(); host.onDocEdited(); invalidate() }
+        }
+        endFingers()
+        tapValid = false
+        mode = Mode.IGNORE
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
         val d = doc ?: return true
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 fCount = 0
-                if (isPen(e, 0)) { mode = Mode.PEN; penDown(d, e, 0) }
-                else {
-                    mode = Mode.FINGER
+                if (isPen(e, 0)) {
+                    lastPenSeen = SystemClock.uptimeMillis()
+                    mode = Mode.PEN; penDown(d, e, 0)
+                } else {
                     tapStart(d, e)
-                    fingersChanged(d, e, -1)
+                    fingerStartT = SystemClock.uptimeMillis()
+                    if (penBlocksFingers() || isPalm(e, 0)) { mode = Mode.IGNORE; tapValid = false }
+                    else {
+                        mode = Mode.FINGER
+                        fingersChanged(d, e, -1)
+                    }
                 }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 val i = e.actionIndex
-                if (mode == Mode.FINGER && isPen(e, i)) {
+                if ((mode == Mode.FINGER || mode == Mode.IGNORE) && isPen(e, i)) {
+                    // Stift kurz nach der Fingerberührung: das war die Hand
+                    if (mode == Mode.FINGER && SystemClock.uptimeMillis() - fingerStartT < 1500) rejectFingers(d)
                     endFingers()
                     tapValid = false
+                    lastPenSeen = SystemClock.uptimeMillis()
                     mode = Mode.PEN
                     penDown(d, e, i)
                 } else if (mode == Mode.FINGER) {
-                    tapAdd(e, i)
-                    fingersChanged(d, e, -1)
+                    if (isPalm(e, i) || penBlocksFingers()) rejectFingers(d)
+                    else {
+                        tapAdd(e, i)
+                        fingersChanged(d, e, -1)
+                    }
                 }
             }
             MotionEvent.ACTION_MOVE -> when (mode) {
-                Mode.PEN -> penMove(d, e)
-                Mode.FINGER -> { tapMove(e); fingerMove(d, e) }
+                Mode.PEN -> { lastPenSeen = SystemClock.uptimeMillis(); penMove(d, e) }
+                Mode.FINGER -> {
+                    if (anyPalm(e) || penNear) rejectFingers(d)
+                    else { tapMove(e); fingerMove(d, e) }
+                }
                 else -> {}
             }
             MotionEvent.ACTION_POINTER_UP -> {
                 val i = e.actionIndex
-                if (mode == Mode.PEN && e.getPointerId(i) == penId) { penUp(d, e, i); mode = Mode.NONE }
-                else if (mode == Mode.FINGER) fingersChanged(d, e, i)
+                if (mode == Mode.PEN && e.getPointerId(i) == penId) {
+                    lastPenSeen = SystemClock.uptimeMillis()
+                    penUp(d, e, i); mode = Mode.IGNORE
+                } else if (mode == Mode.FINGER) {
+                    if (canceledByPalm(e)) rejectFingers(d) else fingersChanged(d, e, i)
+                }
             }
             MotionEvent.ACTION_UP -> {
-                if (mode == Mode.PEN && e.getPointerId(0) == penId) penUp(d, e, 0)
-                else if (mode == Mode.FINGER) { fingersChanged(d, e, 0); tapEnd(d) }
+                if (mode == Mode.PEN && e.getPointerId(0) == penId) {
+                    lastPenSeen = SystemClock.uptimeMillis()
+                    penUp(d, e, 0)
+                } else if (mode == Mode.FINGER) {
+                    if (canceledByPalm(e)) rejectFingers(d)
+                    else { fingersChanged(d, e, 0); tapEnd(d) }
+                }
                 mode = Mode.NONE
             }
             MotionEvent.ACTION_CANCEL -> {
                 if (mode == Mode.PEN) finishAction(d)
-                if (mode == Mode.FINGER) endFingers()
+                if (mode == Mode.FINGER) rejectFingers(d)
                 tapValid = false
                 mode = Mode.NONE
             }
@@ -943,6 +1018,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     // ---- Finger: 1 = verschieben, 2 = zoomen/drehen/verschieben bzw. Lineal
 
     private var fCount = 0
+    private var panning = false
     private val fIds = IntArray(2)
     private var panX = 0f; private var panY = 0f
     private var onRulerG = false
@@ -973,6 +1049,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             fIds[0] = ids[0]
             val i = e.findPointerIndex(fIds[0])
             if (i >= 0) { panX = e.getX(i); panY = e.getY(i) }
+            panning = false
         } else if (fCount == 2) {
             fIds[0] = ids[0]; fIds[1] = ids[1]
             startTwo(d, e)
@@ -1013,6 +1090,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val i = e.findPointerIndex(fIds[0])
             if (i < 0) return
             val x = e.getX(i); val y = e.getY(i)
+            if (!panning) {
+                if (hypot(x - panX, y - panY) < 8f * dens) return
+                panning = true
+            }
             d.offX += x - panX; d.offY += y - panY
             panX = x; panY = y
             viewChanged()
