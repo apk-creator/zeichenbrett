@@ -276,8 +276,8 @@ class MainActivity : Activity(), CanvasView.Host {
         bUndo = Btn(this).apply { icon = "undo"; onTap = { doUndo(true) } }
         bRedo = Btn(this).apply { icon = "redo"; onTap = { doUndo(false) } }
         bImport = Btn(this).apply { icon = "import"; onTap = { startImport() } }
-        bSave = Btn(this).apply { icon = "save"; onTap = { active?.let { saveDoc(it, null) } } }
-        bClose = Btn(this).apply { icon = "close"; onTap = { active?.let { closeDoc(it) } } }
+        bSave = Btn(this).apply { icon = "save"; onTap = { this@MainActivity.active?.let { saveDoc(it, null) } } }
+        bClose = Btn(this).apply { icon = "close"; onTap = { this@MainActivity.active?.let { closeDoc(it) } } }
         setBar.addView(bScale, LinearLayout.LayoutParams(wide, btnSize))
         setBar.addView(bZoom, LinearLayout.LayoutParams(wide, btnSize))
         for (b in listOf(bRuler, bUndo, bRedo, bImport, bSave, bClose)) setBar.addView(b, LinearLayout.LayoutParams(btnSize, btnSize))
