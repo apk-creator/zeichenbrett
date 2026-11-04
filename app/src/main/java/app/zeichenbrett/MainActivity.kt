@@ -487,11 +487,14 @@ class MainActivity : Activity(), CanvasView.Host {
             scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
         }, LinearLayout.LayoutParams(markW, btnSize).apply { marginStart = dpi(6f); marginEnd = dpi(10f) })
         val avail = rw - sw - dpi(12f) * 3 - docBar.paddingLeft - docBar.paddingRight - markW - dpi(16f)
-        val slot = ((avail - btnSize - gap * 5) / 5).coerceAtLeast(btnSize)
+        val portrait = root.height > root.width
+        val slot = if (portrait) (avail - btnSize - gap).coerceAtLeast(btnSize)
+            else ((avail - btnSize - gap * 5) / 5).coerceAtLeast(btnSize)
         docSlot = slot
 
         val idx = docs.indexOf(d)
         val shown: List<PageDoc> = when {
+            portrait -> listOf(d)
             docs.size <= 5 -> docs.toList()
             idx < 5 -> docs.subList(0, 5).toList()
             else -> docs.subList(0, 4).toList() + d
@@ -507,7 +510,7 @@ class MainActivity : Activity(), CanvasView.Host {
             }
             docBar.addView(b, LinearLayout.LayoutParams(slot, btnSize).apply { marginEnd = gap })
         }
-        if (docs.size <= 5) {
+        if (docs.size <= 5 && !portrait) {
             if (docs.size < MAX_DOCS) {
                 docBar.addView(Btn(this).apply { icon = "plus"; onTap = { showStart() } }, LinearLayout.LayoutParams(btnSize, btnSize))
             }
@@ -680,14 +683,16 @@ class MainActivity : Activity(), CanvasView.Host {
                     canvasView.showSizePreview(Pal.PENS[idx], canvasView.penPx(tools.penWidth[idx]), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() })
             }
-            box.addView(slider, LinearLayout.LayoutParams(dpi(360f), btnSize))
+            // Gleiche Abstände zwischen den Fangpunkten wie bei den Stiften (45 dp je Abschnitt)
+            val segs = (if (k == T_ERASER) ERASER_ANCHORS.size else PEN_ANCHORS.size) - 1
+            box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
             box.addView(label, LinearLayout.LayoutParams((btnSize * 1.8f).roundToInt(), btnSize))
             if (k == T_ERASER) {
                 val bg = Btn(this)
-                bg.text = "Hintergrund ignorieren"
+                bg.icon = "nobg"
                 bg.active = !tools.eraseBackground
                 bg.onTap = { tools.eraseBackground = !tools.eraseBackground; bg.active = !tools.eraseBackground }
-                box.addView(bg, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, btnSize))
+                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize))
             }
         }
         val btn = toolBtns[k]
@@ -696,8 +701,9 @@ class MainActivity : Activity(), CanvasView.Host {
             leftMargin = toolBar.right + dpi(8f)
             topMargin = toolBar.top + btn.top + btn.height / 2 - (btnSize + toolBar.paddingTop * 2) / 2
         }
-        prevX = (p.leftMargin + box.paddingLeft + dpi(180f)).toFloat()
-        prevBottom = p.topMargin.toFloat()
+        box.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        prevX = (p.leftMargin + box.measuredWidth + dpi(16f)).toFloat()
+        prevBottom = (p.topMargin + box.measuredHeight / 2).toFloat()
         showPopup(box, p, k, withCatcher = false)
     }
 

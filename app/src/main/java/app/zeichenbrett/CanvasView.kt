@@ -386,7 +386,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
         sizePreview?.let { (color, dia) ->
             val r = max(dia / 2f, 0.5f)
-            val cx = previewX; val cy = previewBottom - r - 10f * dens
+            val cx = previewX + r; val cy = previewBottom
             if (color == null) {
                 strokeP.color = Pal.BLACK; strokeP.strokeWidth = 1.5f * dens
                 c.drawCircle(cx, cy, r, strokeP)
@@ -426,7 +426,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private var previewX = 0f
     private var previewBottom = 0f
 
-    /** Vorschau mittig über dem Regler: x = Mitte, bottom = Unterkante des freien Bereichs. */
+    /** Vorschau rechts neben dem Reglerpanel: x = linker Rand des Punkts, bottom = vertikale Mitte. */
     fun showSizePreview(color: Int?, diameterPx: Float, x: Float, bottom: Float) {
         sizePreview = color to diameterPx; previewX = x; previewBottom = bottom; invalidate()
     }
@@ -955,7 +955,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     /** Fang nur bei schneller Drehung (°/s), langsam lassen sich alle ganzen Grad einstellen. */
     private fun snapIfFast(raw: Float, step: Float): Float =
-        if (angSpeed > 35f) snapTo(raw, step, 3f) else ((raw % 360f) + 360f) % 360f
+        if (angSpeed > 35f) snapTo(raw, step, 5f) else ((raw % 360f) + 360f) % 360f
     private var g0cx = 0f; private var g0cy = 0f; private var g0span = 1f; private var g0ang = 0f
     private var g0zoom = 1f; private var g0rot = 0f; private var g0px = 0f; private var g0py = 0f
     private var g0rx = 0f; private var g0ry = 0f; private var g0ra = 0f

@@ -318,6 +318,13 @@ object Icons {
                 path.moveTo(6f, 9f); path.lineTo(12f, 15f); path.lineTo(18f, 9f)
                 c.drawPath(path, p)
             }
+            "nobg" -> {
+                // Hintergrund (Plan) durchgestrichen: nur eigene Striche radieren
+                c.drawRect(4f, 4f, 20f, 20f, p)
+                c.drawLine(7f, 9f, 17f, 9f, p); c.drawLine(7f, 12.5f, 14f, 12.5f, p); c.drawLine(7f, 16f, 12f, 16f, p)
+                p.strokeWidth = 2.4f
+                c.drawLine(2.5f, 21.5f, 21.5f, 2.5f, p)
+            }
             "check" -> {
                 path.moveTo(5f, 12.5f); path.lineTo(10f, 17.5f); path.lineTo(19.5f, 7f)
                 c.drawPath(path, p)
