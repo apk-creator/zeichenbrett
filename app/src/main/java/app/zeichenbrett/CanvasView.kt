@@ -144,7 +144,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         viewChanged()
     }
 
-    fun setRotation(r: Float) {
+    fun setPlanRotation(r: Float) {
         val d = doc ?: return
         val c = toDoc(d, width / 2f, height / 2f)
         d.rot = r

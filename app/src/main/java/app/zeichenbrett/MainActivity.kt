@@ -645,7 +645,7 @@ class MainActivity : Activity(), CanvasView.Host {
         if (pend != null) {
             ui.removeCallbacks(pend)
             rotTapPending = null
-            if (!tools.rotLocked) canvasView.setRotation(0f)
+            if (!tools.rotLocked) canvasView.setPlanRotation(0f)
             return
         }
         val r = Runnable {
