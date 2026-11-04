@@ -17,6 +17,9 @@ object Pal {
     val BLACK = Color.rgb(5, 5, 5)
     val WHITE = Color.rgb(245, 245, 245)
     val GREY = Color.rgb(140, 140, 140)
+    /** Aktivierte Buttons/Labels: dunkelgrau gefüllt, weiße Schrift. */
+    val ACTIVE_BG = Color.rgb(120, 120, 120)
+    val ACTIVE_FG = Color.rgb(250, 250, 250)
 
     /** Weiß, Schwarz, Rot, Grün, Blau – Reihenfolge der Werkzeugpalette. */
     val PENS = intArrayOf(
@@ -65,8 +68,9 @@ class Cover(val color: Int, val width: Float, val pts: FloatArray) : Item() {
 }
 
 /**
- * Importiertes Bild oder PDF. Box (x, y, w, h) in pt, achsparallel nach der Drehung.
- * srcW/srcH: Pixel (Bild) bzw. pt (PDF) des ungedrehten Inhalts.
+ * Importiertes Bild oder PDF. (x, y, w, h) = ungedrehter Inhalt in pt, gedreht um [angle] Grad
+ * (im Uhrzeigersinn) um seine Mitte. srcW/srcH: Pixel (Bild) bzw. pt (PDF).
+ * ox/oy: Mittelpunkt beim Import (für „1:1“).
  */
 data class ImageItem(
     val id: String,
@@ -79,11 +83,25 @@ data class ImageItem(
     val y: Float,
     val w: Float,
     val h: Float,
-    val rot: Int,
+    val angle: Float,
     val fixed: Boolean,
     /** Bildauflösung aus den Metadaten (für „Originalgröße“). */
     val srcDpi: Float = 150f,
-) : Item()
+    val ox: Float = 0f,
+    val oy: Float = 0f,
+) : Item() {
+    val cx get() = x + w / 2f
+    val cy get() = y + h / 2f
+
+    /** Ecken (oben links, oben rechts, unten rechts, unten links) im Dokument. */
+    fun corners(): FloatArray {
+        val m = android.graphics.Matrix()
+        m.setRotate(angle, cx, cy)
+        val c = floatArrayOf(x, y, x + w, y, x + w, y + h, x, y + h)
+        m.mapPoints(c)
+        return c
+    }
+}
 
 fun boundsOf(p: FloatArray): RectF {
     if (p.size < 2) return RectF()

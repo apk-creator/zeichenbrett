@@ -190,17 +190,14 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         itemHr.clear()
     }
 
-    private fun sig(im: ImageItem) = "${im.id}|${im.x}|${im.y}|${im.w}|${im.h}|${im.rot}"
+    private fun sig(im: ImageItem) = "${im.id}|${im.x}|${im.y}|${im.w}|${im.h}|${im.angle}"
 
     private fun itemMatrix(im: ImageItem): Matrix {
-        val odd = im.rot % 2 == 1
-        val cw = if (odd) im.h else im.w
-        val ch = if (odd) im.w else im.h
         val m = Matrix()
-        m.setScale(cw / im.srcW, ch / im.srcH)
-        m.postTranslate(-cw / 2f, -ch / 2f)
-        m.postRotate(im.rot * 90f)
-        m.postTranslate(im.x + im.w / 2f, im.y + im.h / 2f)
+        m.setScale(im.w / im.srcW, im.h / im.srcH)
+        m.postTranslate(-im.w / 2f, -im.h / 2f)
+        m.postRotate(im.angle)
+        m.postTranslate(im.cx, im.cy)
         return m
     }
 
@@ -218,10 +215,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val jobs = ArrayList<Triple<ImageItem, android.graphics.Rect, Matrix>>()
         for (im in pdfItems) {
             val b = d.bitmaps[im.id]
-            val cw = if (im.rot % 2 == 1) im.h else im.w
-            if (b != null && cw * s <= b.width * 1.1f) continue
-            val box = RectF(im.x, im.y, im.x + im.w, im.y + im.h)
-            m.mapRect(box)
+            if (b != null && im.w * s <= b.width * 1.1f) continue
+            val cs = im.corners()
+            m.mapPoints(cs)
+            val box = RectF(minOf(cs[0], cs[2], cs[4], cs[6]), minOf(cs[1], cs[3], cs[5], cs[7]),
+                maxOf(cs[0], cs[2], cs[4], cs[6]), maxOf(cs[1], cs[3], cs[5], cs[7]))
             val rc = android.graphics.Rect(
                 floor(box.left).toInt().coerceAtLeast(0), floor(box.top).toInt().coerceAtLeast(0),
                 ceil(box.right).toInt().coerceAtMost(w), ceil(box.bottom).toInt().coerceAtMost(h),
@@ -326,7 +324,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
         // Auswahl (Bild)
         d.selected()?.let { im ->
-            val cs = floatArrayOf(im.x, im.y, im.x + im.w, im.y, im.x + im.w, im.y + im.h, im.x, im.y + im.h)
+            val cs = im.corners()
             m.mapPoints(cs)
             strokeP.color = Pal.BLACK; strokeP.strokeWidth = 2f * dens
             tmpPath.reset()
@@ -378,7 +376,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     }
 
     private fun label(c: Canvas, t: String, x: Float, y: Float) {
-        textP.textSize = 16f * dens
+        textP.textSize = android.util.TypedValue.applyDimension(android.util.TypedValue.COMPLEX_UNIT_SP, 16f, resources.displayMetrics)
         textP.isFakeBoldText = false
         val tw = textP.measureText(t)
         val padH = 10f * dens; val padV = 6f * dens
@@ -433,13 +431,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     }
 
     private fun drawImage(c: Canvas, d: PageDoc, im: ImageItem) {
-        val odd = im.rot % 2 == 1
-        val cw = if (odd) im.h else im.w
-        val ch = if (odd) im.w else im.h
         c.save()
-        c.translate(im.x + im.w / 2f, im.y + im.h / 2f)
-        c.rotate(im.rot * 90f)
-        val dst = RectF(-cw / 2f, -ch / 2f, cw / 2f, ch / 2f)
+        c.translate(im.cx, im.cy)
+        c.rotate(im.angle)
+        val dst = RectF(-im.w / 2f, -im.h / 2f, im.w / 2f, im.h / 2f)
         val bmp = d.bitmaps[im.id]
         if (bmp != null && !bmp.isRecycled) c.drawBitmap(bmp, null, dst, bmpP)
         else { fillP.color = Color.LTGRAY; c.drawRect(dst, fillP) }
@@ -767,13 +762,19 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             }
             PenAct.MEASURE -> { measureB?.set(dx, dy); updateMeasure(d) }
             PenAct.MOVE -> updateSel(d) { it.copy(x = dx - grabDX, y = dy - grabDY) }
-            PenAct.SCALE -> {
-                val ddx = dx - selFixX; val ddy = dy - selFixY
-                val nw = max(abs(ddx), abs(ddy) * selAspect).coerceAtLeast(5f)
+            PenAct.SCALE -> updateSel(d) { im ->
+                // Zeiger in den gedrehten Rahmen des Elements übertragen, gegenüberliegende Ecke bleibt fest
+                val a = Math.toRadians(-im.angle.toDouble())
+                val vx = dx - selFixX; val vy = dy - selFixY
+                val lx = (vx * cos(a) - vy * sin(a)).toFloat()
+                val ly = (vx * sin(a) + vy * cos(a)).toFloat()
+                val nw = max(abs(lx), abs(ly) * selAspect).coerceAtLeast(5f)
                 val nh = nw / selAspect
-                val nx = if (ddx < 0) selFixX - nw else selFixX
-                val ny = if (ddy < 0) selFixY - nh else selFixY
-                updateSel(d) { it.copy(x = nx, y = ny, w = nw, h = nh) }
+                val hx = (if (lx < 0) -nw else nw) / 2f; val hy = (if (ly < 0) -nh else nh) / 2f
+                val b = Math.toRadians(im.angle.toDouble())
+                val ncx = selFixX + (hx * cos(b) - hy * sin(b)).toFloat()
+                val ncy = selFixY + (hx * sin(b) + hy * cos(b)).toFloat()
+                im.copy(x = ncx - nw / 2f, y = ncy - nh / 2f, w = nw, h = nh)
             }
             PenAct.NONE -> {}
         }
@@ -839,7 +840,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     // ---- Bildauswahl
 
     private fun selectionDown(d: PageDoc, im: ImageItem, x: Float, y: Float, dx: Float, dy: Float) {
-        val corners = floatArrayOf(im.x, im.y, im.x + im.w, im.y, im.x + im.w, im.y + im.h, im.x, im.y + im.h)
+        val corners = im.corners()
         val sc = corners.copyOf()
         viewMatrix(d).mapPoints(sc)
         val hr = 28f * dens
@@ -854,13 +855,22 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 return
             }
         }
-        if (dx in im.x..(im.x + im.w) && dy in im.y..(im.y + im.h)) {
+        if (insideItem(im, dx, dy, 0f)) {
             grabDX = dx - im.x; grabDY = dy - im.y
             d.pushUndo()
             act = PenAct.MOVE
             return
         }
         act = PenAct.NONE
+    }
+
+    /** Liegt der Dokumentpunkt im (gedrehten) Element? margin in pt. */
+    private fun insideItem(im: ImageItem, px: Float, py: Float, margin: Float): Boolean {
+        val a = Math.toRadians(-im.angle.toDouble())
+        val vx = px - im.cx; val vy = py - im.cy
+        val lx = (vx * cos(a) - vy * sin(a)).toFloat()
+        val ly = (vx * sin(a) + vy * cos(a)).toFloat()
+        return abs(lx) <= im.w / 2f + margin && abs(ly) <= im.h / 2f + margin
     }
 
     private inline fun updateSel(d: PageDoc, f: (ImageItem) -> ImageItem) {
@@ -872,10 +882,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val d = doc ?: return
         if (d.selected() == null) return
         d.pushUndo()
-        updateSel(d) {
-            val cx = it.x + it.w / 2f; val cy = it.y + it.h / 2f
-            it.copy(rot = (it.rot + 1) % 4, w = it.h, h = it.w, x = cx - it.h / 2f, y = cy - it.w / 2f)
-        }
+        // Immer auf den nächsten vollen 90°-Schritt weiter
+        updateSel(d) { it.copy(angle = ((kotlin.math.floor(it.angle / 90f + 1e-3f) + 1f) * 90f) % 360f) }
         d.dirty = true
         host.onDocEdited()
         invalidate()
@@ -906,6 +914,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private var panX = 0f; private var panY = 0f
     private var onRulerG = false
     private var rotating = false
+    private var imgRotG = false
+    private var g0img = 0f
+    private var lastAng = 0f
+    private var lastAngT = 0L
+    private var angSpeed = 0f
+
+    /** Fang nur bei schneller Drehung (°/s), langsam lassen sich alle ganzen Grad einstellen. */
+    private fun snapIfFast(raw: Float, step: Float): Float =
+        if (angSpeed > 90f) snapTo(raw, step, 3f) else ((raw % 360f) + 360f) % 360f
     private var g0cx = 0f; private var g0cy = 0f; private var g0span = 1f; private var g0ang = 0f
     private var g0zoom = 1f; private var g0rot = 0f; private var g0px = 0f; private var g0py = 0f
     private var g0rx = 0f; private var g0ry = 0f; private var g0ra = 0f
@@ -917,6 +934,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (ids.size < 2) ids.add(e.getPointerId(i))
         }
         if (fCount == 2 && ids.size == 2 && ids[0] == fIds[0] && ids[1] == fIds[1]) return
+        if (fCount == 2 && imgRotG) { imgRotG = false; host.onDocEdited() }
         fCount = ids.size
         if (fCount == 1) {
             fIds[0] = ids[0]
@@ -942,7 +960,19 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         g0px = p.x; g0py = p.y
         g0rx = tools.rulerX; g0ry = tools.rulerY; g0ra = tools.rulerAngle
         rotating = false
+        lastAng = g0ang; lastAngT = SystemClock.uptimeMillis(); angSpeed = 0f
         onRulerG = onRuler(x0, y0) && onRuler(x1, y1)
+        imgRotG = false
+        val sel = d.selected()
+        if (!onRulerG && sel != null) {
+            val p0 = toDoc(d, x0, y0); val p1 = toDoc(d, x1, y1)
+            val m = 24f * dens / scaleOf(d)
+            if (insideItem(sel, p0.x, p0.y, m) && insideItem(sel, p1.x, p1.y, m)) {
+                imgRotG = true
+                g0img = sel.angle
+                d.pushUndo()
+            }
+        }
     }
 
     private fun fingerMove(d: PageDoc, e: MotionEvent) {
@@ -960,10 +990,21 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val cx = (x0 + x1) / 2f; val cy = (y0 + y1) / 2f
             val span = max(hypot(x1 - x0, y1 - y0), 1f)
             val ang = Math.toDegrees(atan2((y1 - y0).toDouble(), (x1 - x0).toDouble())).toFloat()
+            val now = SystemClock.uptimeMillis()
+            val dt = (now - lastAngT).coerceAtLeast(1L)
+            angSpeed = angSpeed * 0.6f + 0.4f * abs(angleDiff(ang, lastAng)) * 1000f / dt
+            lastAng = ang; lastAngT = now
+            if (imgRotG) {
+                val na = ((g0img + angleDiff(ang, g0ang)) % 360f + 360f) % 360f
+                updateSel(d) { it.copy(angle = na) }
+                d.dirty = true
+                invalidate()
+                return
+            }
             if (onRulerG) {
                 tools.rulerX = g0rx + cx - g0cx
                 tools.rulerY = g0ry + cy - g0cy
-                tools.rulerAngle = snapTo(g0ra + angleDiff(ang, g0ang), 15f, 3f).roundToInt().toFloat() % 360f
+                tools.rulerAngle = snapIfFast(g0ra + angleDiff(ang, g0ang), 15f).roundToInt().toFloat() % 360f
                 host.refreshStatus()
                 invalidate()
                 return
@@ -980,7 +1021,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     g0ang += 12f * sign(delta)
                     delta = angleDiff(ang, g0ang)
                 }
-                d.rot = if (rotating) snapTo(g0rot + delta, 45f, 3f).roundToInt().toFloat() % 360f else g0rot
+                d.rot = if (rotating) snapIfFast(g0rot + delta, 45f).roundToInt().toFloat() % 360f else g0rot
             }
             place(d, g0px, g0py, cx, cy)
             viewChanged()

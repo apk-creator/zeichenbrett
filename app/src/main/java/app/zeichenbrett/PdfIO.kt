@@ -254,12 +254,11 @@ object PdfIO {
     }
 
     private fun drawImageItem(pd: PDDocument, cs: PDPageContentStream, im: ImageItem, H: Float, dpi: Int, keep: MutableList<PDDocument>) {
-        val odd = im.rot % 2 == 1
-        val cw = if (odd) im.h else im.w
-        val ch = if (odd) im.w else im.h
-        val cx = im.x + im.w / 2f
-        val cy = H - (im.y + im.h / 2f)
-        val place = Aff.T(cx, cy) * Aff.R((-im.rot * Math.PI / 2.0).toFloat()) * Aff.T(-cw / 2f, -ch / 2f)
+        val cw = im.w
+        val ch = im.h
+        val cx = im.cx
+        val cy = H - im.cy
+        val place = Aff.T(cx, cy) * Aff.R(Math.toRadians(-im.angle.toDouble()).toFloat()) * Aff.T(-cw / 2f, -ch / 2f)
         cs.saveGraphicsState()
         if (im.isPdf) {
             val src = PDDocument.load(File(im.file))

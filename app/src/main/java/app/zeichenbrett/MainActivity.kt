@@ -416,7 +416,7 @@ class MainActivity : Activity(), CanvasView.Host {
         for ((ic, f) in listOf<Pair<String, () -> Unit>>(
             "close" to { cancelSelection() },
             "rotate" to { canvasView.rotateSelected() },
-            "fit" to { editSelection { d, im -> fitBox(d, im.w / im.h, im) } },
+            "fit" to { editSelection { d, im -> fitBox(d, im) } },
             "orig" to { editSelection { _, im -> origBox(im) } },
             "center" to { editSelection { d, im -> im.copy(x = (d.pageW - im.w) / 2f, y = (d.pageH - im.h) / 2f) } },
             "check" to { fixSelection() },
@@ -476,8 +476,14 @@ class MainActivity : Activity(), CanvasView.Host {
         val gap = dpi(4f)
         val rw = if (root.width > 0) root.width else resources.displayMetrics.widthPixels
         val sw = if (setBar.width > 0) setBar.width else rw / 3
-        // 5 Label + 1 Button (Dropdown bzw. „+“) bis an die Einstellungspalette
-        val avail = rw - sw - dpi(12f) * 3 - docBar.paddingLeft - docBar.paddingRight
+        // App-Zeichen links, dann 5 Label + 1 Button (Dropdown bzw. „+“) bis an die Einstellungspalette
+        val markH = (btnSize * 0.8f).roundToInt()
+        val markW = (markH * 46f / 62f).roundToInt()
+        docBar.addView(android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_app_mark)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        }, LinearLayout.LayoutParams(markW, btnSize).apply { marginStart = dpi(6f); marginEnd = dpi(10f) })
+        val avail = rw - sw - dpi(12f) * 3 - docBar.paddingLeft - docBar.paddingRight - markW - dpi(16f)
         val slot = ((avail - btnSize - gap * 5) / 5).coerceAtLeast(btnSize)
         docSlot = slot
 
@@ -491,7 +497,6 @@ class MainActivity : Activity(), CanvasView.Host {
             val b = Btn(this).apply {
                 text = labelText(doc)
                 textSp = 16f
-                multiLine = true
                 alignLeft = true
                 active = doc === d
                 onTap = { activate(doc) }
@@ -668,6 +673,8 @@ class MainActivity : Activity(), CanvasView.Host {
     }
 
     private var zoomLastTap = 0L
+    private var zoomBadgeHold = false
+    private var rotBadgeHold = false
     private var rotLastTap = 0L
 
     /** Einfacher Tipp: Sperre sofort umschalten. Doppeltipp: Sperre zurück und (falls frei) auf 100 % / 0°. */
@@ -680,6 +687,8 @@ class MainActivity : Activity(), CanvasView.Host {
             bZoom.flash()
         } else {
             zoomLastTap = now
+            zoomBadgeHold = true
+            ui.postDelayed({ zoomBadgeHold = false; refreshUi() }, 320)
             tools.zoomLocked = !tools.zoomLocked
         }
         refreshUi()
@@ -694,6 +703,8 @@ class MainActivity : Activity(), CanvasView.Host {
             bRot.flash()
         } else {
             rotLastTap = now
+            rotBadgeHold = true
+            ui.postDelayed({ rotBadgeHold = false; refreshUi() }, 320)
             tools.rotLocked = !tools.rotLocked
         }
         refreshUi()
@@ -720,22 +731,22 @@ class MainActivity : Activity(), CanvasView.Host {
         refreshUi()
     }
 
-    /** Größtmöglich proportional auf die Seite, zentriert. */
-    private fun fitBox(d: PageDoc, aspect: Float, im: ImageItem): ImageItem {
-        var w = d.pageW; var h = w / aspect
-        if (h > d.pageH) { h = d.pageH; w = h * aspect }
+    /** Größtmöglich proportional auf die Seite, zentriert; die Drehung bleibt. */
+    private fun fitBox(d: PageDoc, im: ImageItem): ImageItem {
+        val t = Math.toRadians(im.angle.toDouble())
+        val c = kotlin.math.abs(kotlin.math.cos(t)).toFloat(); val sn = kotlin.math.abs(kotlin.math.sin(t)).toFloat()
+        val bw = im.w * c + im.h * sn
+        val bh = im.w * sn + im.h * c
+        val k = min(d.pageW / bw, d.pageH / bh)
+        val w = im.w * k; val h = im.h * k
         return im.copy(x = (d.pageW - w) / 2f, y = (d.pageH - h) / 2f, w = w, h = h)
     }
 
-    /** Originalgröße: Bilder nach ihrer DPI, PDFs in ihrer Seitengröße; Mittelpunkt bleibt. */
+    /** 1:1: Originalgröße (Bilder nach DPI, PDFs in Seitengröße) an der Ursprungsposition, ungedreht. */
     private fun origBox(im: ImageItem): ImageItem {
-        val cw = if (im.isPdf) im.srcW else im.srcW / im.srcDpi * 72f
-        val ch = if (im.isPdf) im.srcH else im.srcH / im.srcDpi * 72f
-        val odd = im.rot % 2 == 1
-        val w = if (odd) ch else cw
-        val h = if (odd) cw else ch
-        val cx = im.x + im.w / 2f; val cy = im.y + im.h / 2f
-        return im.copy(x = cx - w / 2f, y = cy - h / 2f, w = w, h = h)
+        val w = if (im.isPdf) im.srcW else im.srcW / im.srcDpi * 72f
+        val h = if (im.isPdf) im.srcH else im.srcH / im.srcDpi * 72f
+        return im.copy(x = im.ox - w / 2f, y = im.oy - h / 2f, w = w, h = h, angle = 0f)
     }
 
     private fun cancelSelection() {
@@ -767,10 +778,10 @@ class MainActivity : Activity(), CanvasView.Host {
         if (!::bZoom.isInitialized) return
         val d = active
         bZoom.text = "${((d?.zoom ?: 1f) * 100f).roundToInt()} %"
-        bZoom.badge = if (tools.zoomLocked) "lock" else null
+        bZoom.badge = if (tools.zoomLocked && !zoomBadgeHold) "lock" else null
         bZoom.active = tools.zoomLocked
         bRot.text = fmtDeg(d?.rot ?: 0f)
-        bRot.badge = if (tools.rotLocked) "lock" else null
+        bRot.badge = if (tools.rotLocked && !rotBadgeHold) "lock" else null
         bRot.active = tools.rotLocked
     }
 
@@ -1141,19 +1152,19 @@ class MainActivity : Activity(), CanvasView.Host {
                         val out = File(d.workDir, "imp_$id.pdf")
                         val info = PDDocument.load(tmp).use { PdfIO.extractPage(it, 0, out, strip = false) }
                         tmp.delete()
-                        ImageItem(id, true, false, out.path, info.w, info.h, 0f, 0f, 1f, 1f, 0, false)
+                        ImageItem(id, true, false, out.path, info.w, info.h, 0f, 0f, 1f, 1f, 0f, false)
                     }
                     "image/jpeg", "image/png" -> {
                         val isJpeg = mime == "image/jpeg"
                         val fileDpi = Img.readDpi(tmp, isJpeg) ?: 150
                         val norm = Img.normalize(tmp, File(d.workDir, "imp_$id." + if (isJpeg) "jpg" else "png"), isJpeg)
-                        ImageItem(id, false, norm.isJpeg, norm.file.path, norm.w.toFloat(), norm.h.toFloat(), 0f, 0f, 1f, 1f, 0, false, fileDpi.toFloat())
+                        ImageItem(id, false, norm.isJpeg, norm.file.path, norm.w.toFloat(), norm.h.toFloat(), 0f, 0f, 1f, 1f, 0f, false, fileDpi.toFloat())
                     }
                     else -> { tmp.delete(); throw IllegalArgumentException("Dateityp wird nicht unterstützt.") }
                 }
                 val sc = min(d.pageW * 0.5f / item.srcW, d.pageH * 0.5f / item.srcH)
                 val w = item.srcW * sc; val h = item.srcH * sc
-                val placed = item.copy(x = (d.pageW - w) / 2f, y = (d.pageH - h) / 2f, w = w, h = h)
+                val placed = item.copy(x = (d.pageW - w) / 2f, y = (d.pageH - h) / 2f, w = w, h = h, ox = d.pageW / 2f, oy = d.pageH / 2f)
                 val bmp = Img.display(placed)
                 ui.post {
                     hideBusy()

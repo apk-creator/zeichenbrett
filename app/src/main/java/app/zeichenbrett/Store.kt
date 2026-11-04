@@ -40,7 +40,7 @@ object Store {
                     o.put("f", it.file); o.put("sw", it.srcW.toDouble()); o.put("sh", it.srcH.toDouble())
                     o.put("x", it.x.toDouble()); o.put("y", it.y.toDouble())
                     o.put("w", it.w.toDouble()); o.put("h", it.h.toDouble())
-                    o.put("r", it.rot); o.put("fx", it.fixed); o.put("dpi", it.srcDpi.toDouble())
+                    o.put("a", it.angle.toDouble()); o.put("fx", it.fixed); o.put("dpi", it.srcDpi.toDouble()); o.put("ox", it.ox.toDouble()); o.put("oy", it.oy.toDouble())
                 }
             }
             a.put(o)
@@ -56,16 +56,26 @@ object Store {
             when (o.optString("t")) {
                 "s" -> out.add(Stroke(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
                 "c" -> out.add(Cover(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
-                "i" -> out.add(
-                    ImageItem(
-                        o.getString("id"), o.getBoolean("pdf"), o.getBoolean("jpg"), o.getString("f"),
-                        o.getDouble("sw").toFloat(), o.getDouble("sh").toFloat(),
-                        o.getDouble("x").toFloat(), o.getDouble("y").toFloat(),
-                        o.getDouble("w").toFloat(), o.getDouble("h").toFloat(),
-                        o.getInt("r"), o.getBoolean("fx"),
-                        o.optDouble("dpi", 150.0).toFloat(),
+                "i" -> {
+                    var x = o.getDouble("x").toFloat(); var y = o.getDouble("y").toFloat()
+                    var w = o.getDouble("w").toFloat(); var h = o.getDouble("h").toFloat()
+                    val angle: Float
+                    if (o.has("a")) angle = o.getDouble("a").toFloat() else {
+                        val r = o.optInt("r", 0)
+                        angle = r * 90f
+                        if (r % 2 == 1) { val cx = x + w / 2f; val cy = y + h / 2f; val t = w; w = h; h = t; x = cx - w / 2f; y = cy - h / 2f }
+                    }
+                    out.add(
+                        ImageItem(
+                            o.getString("id"), o.getBoolean("pdf"), o.getBoolean("jpg"), o.getString("f"),
+                            o.getDouble("sw").toFloat(), o.getDouble("sh").toFloat(),
+                            x, y, w, h, angle, o.getBoolean("fx"),
+                            o.optDouble("dpi", 150.0).toFloat(),
+                            o.optDouble("ox", (x + w / 2f).toDouble()).toFloat(),
+                            o.optDouble("oy", (y + h / 2f).toDouble()).toFloat(),
+                        )
                     )
-                )
+                }
             }
         }
         return out

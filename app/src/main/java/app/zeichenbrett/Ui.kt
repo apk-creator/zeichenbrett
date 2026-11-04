@@ -124,12 +124,12 @@ class Btn(ctx: Context) : View(ctx) {
         val w = width.toFloat(); val h = height.toFloat()
         val inv = active || (down && enabledBtn)
         if (inv) {
-            p.style = Paint.Style.FILL; p.color = Pal.BLACK
+            p.style = Paint.Style.FILL; p.color = Pal.ACTIVE_BG
             val r = context.dp(R_BUTTON)
             c.drawRoundRect(1f, 1f, w - 1f, h - 1f, r, r, p)
         }
         val fg = when {
-            inv -> Pal.WHITE
+            inv -> Pal.ACTIVE_FG
             !enabledBtn || grey -> Pal.GREY
             else -> Pal.BLACK
         }
@@ -137,10 +137,10 @@ class Btn(ctx: Context) : View(ctx) {
         tp.color = fg
         tp.isFakeBoldText = bold
         if (ic != null && tx != null) {
-            Icons.draw(c, ic, w / 2f, h * 0.35f, h * 0.42f, fg, iconFill, p)
+            Icons.draw(c, ic, w / 2f, h * 0.36f, h * 0.42f, fg, iconFill, p)
             tp.textSize = h * 0.26f
             tp.textAlign = Paint.Align.CENTER
-            c.drawText(tx, w / 2f, h * 0.9f, tp)
+            c.drawText(tx, w / 2f, h * 0.79f, tp)
         } else if (ic != null) {
             Icons.draw(c, ic, w / 2f, h / 2f, h * 0.52f * iconScale, fg, iconFill, p)
         } else if (tx != null) {
@@ -314,9 +314,8 @@ object Icons {
             "fit" -> {
                 // Rechteck, proportional gefüllt von einem um 45° gedrehten Quadrat
                 c.drawRect(2.5f, 5.5f, 21.5f, 18.5f, p)
-                path.moveTo(12f, 5.5f); path.lineTo(18.5f, 12f); path.lineTo(12f, 18.5f); path.lineTo(5.5f, 12f); path.close()
                 p.style = Paint.Style.FILL
-                c.drawPath(path, p)
+                c.drawCircle(12f, 12f, 6.5f, p)
             }
             "orig" -> {
                 path.moveTo(5.5f, 8f); path.lineTo(7.5f, 6.5f); path.lineTo(7.5f, 17.5f)
