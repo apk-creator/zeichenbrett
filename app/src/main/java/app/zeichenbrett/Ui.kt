@@ -135,8 +135,8 @@ class Btn(ctx: Context) : View(ctx) {
         tp.color = fg
         tp.isFakeBoldText = bold
         if (ic != null && tx != null) {
-            Icons.draw(c, ic, w / 2f, h * 0.38f, h * 0.46f, fg, iconFill, p)
-            tp.textSize = h * 0.22f
+            Icons.draw(c, ic, w / 2f, h * 0.35f, h * 0.42f, fg, iconFill, p)
+            tp.textSize = h * 0.26f
             tp.textAlign = Paint.Align.CENTER
             c.drawText(tx, w / 2f, h * 0.9f, tp)
         } else if (ic != null) {
@@ -172,15 +172,24 @@ class Btn(ctx: Context) : View(ctx) {
             tp.textSize = size * 0.82f
             val lines = split(tx, avail)
             val lh = tp.fontSpacing * 0.95f
+            justify = avail
             line(c, lines.first, w, h / 2f - lh / 2f)
             line(c, lines.second, w, h / 2f + lh / 2f)
+            justify = 0f
             return
         }
         line(c, TextUtils.ellipsize(tx, tp, avail, TextUtils.TruncateAt.END).toString(), w, h / 2f)
     }
 
+    private var justify = 0f
+
     private fun line(c: Canvas, s: String, w: Float, cy: Float) {
         val y = cy - (tp.descent() + tp.ascent()) / 2f
+        tp.letterSpacing = 0f
+        if (justify > 0f && s.length > 1) {
+            val extra = justify - tp.measureText(s)
+            if (extra > 0f) tp.letterSpacing = minOf(extra / (s.length - 1) / tp.textSize, 0.08f)
+        }
         if (alignLeft) {
             tp.textAlign = Paint.Align.LEFT
             c.drawText(s, pad, y, tp)
@@ -188,6 +197,7 @@ class Btn(ctx: Context) : View(ctx) {
             tp.textAlign = Paint.Align.CENTER
             c.drawText(s, w / 2f, y, tp)
         }
+        tp.letterSpacing = 0f
     }
 
     /** Teilt an Leer-/Trennzeichen möglichst mittig, sonst nach Breite; zweite Zeile wird bei Bedarf gekürzt. */
@@ -289,13 +299,41 @@ object Icons {
                 c.drawRect(6f, 11f, 18f, 20f, p)
             }
             "plus" -> {
-                c.drawLine(12f, 5f, 12f, 19f, p); c.drawLine(5f, 12f, 19f, 12f, p)
+                c.drawLine(12f, 4.5f, 12f, 19.5f, p); c.drawLine(4.5f, 12f, 19.5f, 12f, p)
             }
             "chevron" -> {
                 path.moveTo(6f, 9f); path.lineTo(12f, 15f); path.lineTo(18f, 9f)
                 c.drawPath(path, p)
             }
+            "check" -> {
+                path.moveTo(5f, 12.5f); path.lineTo(10f, 17.5f); path.lineTo(19.5f, 7f)
+                c.drawPath(path, p)
+            }
+            "fit" -> {
+                c.drawRect(3f, 5f, 21f, 19f, p)
+                path.moveTo(7f, 9f); path.lineTo(7f, 15f)
+                path.moveTo(17f, 9f); path.lineTo(17f, 15f)
+                path.moveTo(9.5f, 12f); path.lineTo(14.5f, 12f)
+                path.moveTo(11.5f, 10f); path.lineTo(9.5f, 12f); path.lineTo(11.5f, 14f)
+                path.moveTo(12.5f, 10f); path.lineTo(14.5f, 12f); path.lineTo(12.5f, 14f)
+                c.drawPath(path, p)
+            }
+            "orig" -> {
+                path.moveTo(5.5f, 8f); path.lineTo(7.5f, 6.5f); path.lineTo(7.5f, 17.5f)
+                path.moveTo(16.5f, 8f); path.lineTo(18.5f, 6.5f); path.lineTo(18.5f, 17.5f)
+                c.drawPath(path, p)
+                p.style = Paint.Style.FILL
+                c.drawCircle(12f, 9.5f, 1.3f, p)
+                c.drawCircle(12f, 14.5f, 1.3f, p)
+            }
+            "center" -> {
+                c.drawRect(3f, 3f, 21f, 21f, p)
+                c.drawCircle(12f, 12f, 3.5f, p)
+                c.drawLine(12f, 6f, 12f, 8.5f, p); c.drawLine(12f, 15.5f, 12f, 18f, p)
+                c.drawLine(6f, 12f, 8.5f, 12f, p); c.drawLine(15.5f, 12f, 18f, 12f, p)
+            }
             "rotate" -> {
+                c.rotate(90f, 12f, 12f)
                 // Kreisbogen im Uhrzeigersinn von oben bis links, Pfeilspitze zeigt nach oben
                 path.addArc(RectF(5f, 5f, 19f, 19f), -90f, 270f)
                 c.drawPath(path, p)
@@ -319,6 +357,7 @@ class SliderView(
     private val anchors: FloatArray,
     var value: Float,
     private val onChange: (Float) -> Unit,
+    private val onRelease: () -> Unit = {},
 ) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pad = ctx.dp(14f)
@@ -367,6 +406,7 @@ class SliderView(
         value = v
         onChange(v)
         invalidate()
+        if (e.actionMasked == MotionEvent.ACTION_UP || e.actionMasked == MotionEvent.ACTION_CANCEL) onRelease()
         return true
     }
 }

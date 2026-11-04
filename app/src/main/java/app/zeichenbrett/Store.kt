@@ -40,7 +40,7 @@ object Store {
                     o.put("f", it.file); o.put("sw", it.srcW.toDouble()); o.put("sh", it.srcH.toDouble())
                     o.put("x", it.x.toDouble()); o.put("y", it.y.toDouble())
                     o.put("w", it.w.toDouble()); o.put("h", it.h.toDouble())
-                    o.put("r", it.rot); o.put("fx", it.fixed)
+                    o.put("r", it.rot); o.put("fx", it.fixed); o.put("dpi", it.srcDpi.toDouble())
                 }
             }
             a.put(o)
@@ -63,6 +63,7 @@ object Store {
                         o.getDouble("x").toFloat(), o.getDouble("y").toFloat(),
                         o.getDouble("w").toFloat(), o.getDouble("h").toFloat(),
                         o.getInt("r"), o.getBoolean("fx"),
+                        o.optDouble("dpi", 150.0).toFloat(),
                     )
                 )
             }

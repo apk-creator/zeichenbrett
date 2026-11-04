@@ -81,6 +81,8 @@ data class ImageItem(
     val h: Float,
     val rot: Int,
     val fixed: Boolean,
+    /** Bildauflösung aus den Metadaten (für „Originalgröße“). */
+    val srcDpi: Float = 150f,
 ) : Item()
 
 fun boundsOf(p: FloatArray): RectF {

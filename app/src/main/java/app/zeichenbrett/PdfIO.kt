@@ -42,7 +42,9 @@ object PdfIO {
 
     fun createBlank(out: File, w: Float, h: Float) {
         PDDocument().use { d ->
-            d.addPage(PDPage(PDRectangle(w, h)))
+            val p = PDPage(PDRectangle(w, h))
+            d.addPage(p)
+            PDPageContentStream(d, p).use { }
             d.save(out)
         }
     }
@@ -125,16 +127,22 @@ object PdfIO {
         val json = try { JSONObject(String(ds.createInputStream().use { it.readBytes() }, Charsets.UTF_8)) } catch (e: Exception) { return null }
         val crc = json.optLong("crc", -1L)
         var items: List<Item>? = null
-        val contents = dict.getDictionaryObject(COSName.CONTENTS)
-        if (crc >= 0 && contents is COSArray) {
-            for (i in contents.size() - 1 downTo 0) {
-                val s = contents.getObject(i) as? COSStream ?: continue
-                val bytes = s.createInputStream().use { it.readBytes() }
-                if (isMarked(bytes) && crcOf(bytes) == crc) {
-                    contents.remove(i)
-                    items = try { Store.itemsFromJson(json.optJSONArray("items")) } catch (e: Exception) { null }
-                    break
+        // Nur der letzte Inhaltsstrom kann der editierbare Strichstrom sein (nach dem letzten Bild).
+        if (crc >= 0) {
+            when (val contents = dict.getDictionaryObject(COSName.CONTENTS)) {
+                is COSArray -> {
+                    val last = contents.size() - 1
+                    val s = if (last >= 0) contents.getObject(last) as? COSStream else null
+                    if (s != null && matches(s, crc)) {
+                        contents.remove(last)
+                        items = parseItems(json)
+                    }
                 }
+                is COSStream -> if (matches(contents, crc)) {
+                    dict.removeItem(COSName.CONTENTS)
+                    items = parseItems(json)
+                }
+                else -> {}
             }
         }
         return ZbInfo(
@@ -144,6 +152,14 @@ object PdfIO {
             items,
         )
     }
+
+    private fun matches(s: COSStream, crc: Long): Boolean {
+        val bytes = s.createInputStream().use { it.readBytes() }
+        return isMarked(bytes) && crcOf(bytes) == crc
+    }
+
+    private fun parseItems(json: JSONObject): List<Item>? =
+        try { Store.itemsFromJson(json.optJSONArray("items")) } catch (e: Exception) { null }
 
     private fun isMarked(bytes: ByteArray): Boolean {
         val head = String(bytes, 0, min(bytes.size, 64), Charsets.ISO_8859_1).trimStart()
@@ -161,38 +177,45 @@ object PdfIO {
             PDDocument.load(base).use { pd ->
                 val page = pd.getPage(0)
                 val H = data.pageH
-                val imgs = data.items.filterIsInstance<ImageItem>()
-                if (imgs.isNotEmpty()) {
-                    PDPageContentStream(pd, page, PDPageContentStream.AppendMode.APPEND, true, false).use { cs ->
-                        for (im in imgs) drawImageItem(pd, cs, im, H, dpi, keep)
-                    }
+                // Elemente in ihrer Reihenfolge schreiben: Bildgruppen unmarkiert, Strichgruppen markiert.
+                // Nur die letzte Strichgruppe (nach dem letzten Bild) bleibt nach dem Wiederöffnen editierbar.
+                val runs = ArrayList<MutableList<Item>>()
+                for (it in data.items) {
+                    val img = it is ImageItem
+                    val lastRun = runs.lastOrNull()
+                    if (lastRun != null && (lastRun[0] is ImageItem) == img) lastRun.add(it) else runs.add(mutableListOf(it))
                 }
-                val draws = data.items.filter { it is Stroke || it is Cover }
                 val json = JSONObject()
-                    .put("v", 1)
+                    .put("v", 2)
                     .put("scale", data.scale)
                     .put("unit", data.unit.name)
                     .put("dpi", dpi)
-                if (draws.isNotEmpty()) {
+                    .put("crc", -1L)
+                for ((ri, run) in runs.withIndex()) {
                     PDPageContentStream(pd, page, PDPageContentStream.AppendMode.APPEND, true, false).use { cs ->
-                        cs.beginMarkedContent(COSName.getPDFName(MARK))
-                        cs.setLineCapStyle(1)
-                        cs.setLineJoinStyle(1)
-                        for (it in draws) {
-                            when (it) {
-                                is Stroke -> polyline(cs, it.pts, it.width, it.color, H)
-                                is Cover -> polyline(cs, it.pts, it.width, it.color, H)
-                                else -> {}
+                        if (run[0] is ImageItem) {
+                            for (im in run) drawImageItem(pd, cs, im as ImageItem, H, dpi, keep)
+                        } else {
+                            cs.beginMarkedContent(COSName.getPDFName(MARK))
+                            cs.setLineCapStyle(1)
+                            cs.setLineJoinStyle(1)
+                            for (it in run) {
+                                when (it) {
+                                    is Stroke -> polyline(cs, it.pts, it.width, it.color, H)
+                                    is Cover -> polyline(cs, it.pts, it.width, it.color, H)
+                                    else -> {}
+                                }
                             }
+                            cs.endMarkedContent()
                         }
-                        cs.endMarkedContent()
                     }
-                    val last = lastContent(page)
-                    val bytes = last?.createInputStream()?.use { it.readBytes() }
-                    json.put("crc", if (bytes != null) crcOf(bytes) else -1L)
-                    json.put("items", Store.itemsToJson(draws))
-                } else {
-                    json.put("crc", -1L)
+                    if (ri == runs.size - 1 && run[0] !is ImageItem) {
+                        val bytes = lastContent(page)?.createInputStream()?.use { it.readBytes() }
+                        if (bytes != null) {
+                            json.put("crc", crcOf(bytes))
+                            json.put("items", Store.itemsToJson(run))
+                        }
+                    }
                 }
                 val ds = pd.document.createCOSStream()
                 ds.createOutputStream().use { it.write(json.toString().toByteArray(Charsets.UTF_8)) }

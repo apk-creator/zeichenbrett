@@ -169,9 +169,12 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private var hires: Bitmap? = null
     private var hrDoc: PageDoc? = null
     private val hrInv = Matrix()
-    private var hrSigs: Set<String> = emptySet()
     private var hrGen = 0
     private val hrRunnable = Runnable { doHiRes() }
+
+    /** Scharf gerenderte importierte PDFs: Bild im Bildschirmausschnitt + Lage. */
+    private class ItemHr(val bmp: Bitmap, val left: Float, val top: Float, val inv: Matrix, val sig: String)
+    private val itemHr = HashMap<String, ItemHr>()
 
     fun requestHiRes() {
         removeCallbacks(hrRunnable)
@@ -183,7 +186,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         hires?.recycle()
         hires = null
         hrDoc = null
-        hrSigs = emptySet()
+        itemHr.values.forEach { it.bmp.recycle() }
+        itemHr.clear()
     }
 
     private fun sig(im: ImageItem) = "${im.id}|${im.x}|${im.y}|${im.w}|${im.h}|${im.rot}"
@@ -206,52 +210,64 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val w = width; val h = height
         if (w <= 0 || h <= 0) return
         val s = scaleOf(d)
-        val pdfItems = d.items.filter { it is ImageItem && it.isPdf && it.fixed }.map { it as ImageItem }
+        val m = Matrix(viewMatrix(d))
         val ov = d.overview
         val baseNeeds = ov == null || d.pageW * s > ov.width * 1.1f
-        val itemNeeds = pdfItems.any { im ->
+        val pdfItems = d.items.filter { it is ImageItem && it.isPdf && it.fixed }.map { it as ImageItem }
+        // Bildschirmausschnitt je Element, falls die Vorschau dort nicht reicht
+        val jobs = ArrayList<Triple<ImageItem, android.graphics.Rect, Matrix>>()
+        for (im in pdfItems) {
             val b = d.bitmaps[im.id]
             val cw = if (im.rot % 2 == 1) im.h else im.w
-            b == null || cw * s > b.width * 1.1f
+            if (b != null && cw * s <= b.width * 1.1f) continue
+            val box = RectF(im.x, im.y, im.x + im.w, im.y + im.h)
+            m.mapRect(box)
+            val rc = android.graphics.Rect(
+                floor(box.left).toInt().coerceAtLeast(0), floor(box.top).toInt().coerceAtLeast(0),
+                ceil(box.right).toInt().coerceAtMost(w), ceil(box.bottom).toInt().coerceAtMost(h),
+            )
+            if (rc.width() <= 0 || rc.height() <= 0) continue
+            val im2 = Matrix(itemMatrix(im)).apply { postConcat(m); postTranslate(-rc.left.toFloat(), -rc.top.toFloat()) }
+            jobs.add(Triple(im, rc, im2))
         }
-        if (!baseNeeds && !itemNeeds) {
-            if (hires != null) { dropHiRes(); invalidate() }
+        if (!baseNeeds && jobs.isEmpty()) {
+            if (hires != null || itemHr.isNotEmpty()) { dropHiRes(); invalidate() }
             return
         }
         val gen = ++hrGen
-        val m = Matrix(viewMatrix(d))
-        val itemMs = pdfItems.map { Matrix(itemMatrix(it)).apply { postConcat(m) } }
-        val sigs = pdfItems.map { sig(it) }.toSet()
         r.execute {
-            val bmp = try { Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888) } catch (t: Throwable) { null }
-            if (bmp != null) {
-                var ok = true
-                try {
-                    r.render(bmp, m)
-                    if (pdfItems.isNotEmpty()) {
-                        val tmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                        val cv = Canvas(bmp)
-                        for ((k, im) in pdfItems.withIndex()) {
-                            if (gen != hrGen) break
-                            tmp.eraseColor(Color.TRANSPARENT)
-                            ParcelFileDescriptor.open(File(im.file), ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
-                                PdfRenderer(pfd).use { pr ->
-                                    pr.openPage(0).use { pg -> pg.render(tmp, null, itemMs[k], PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
-                                }
-                            }
-                            cv.drawBitmap(tmp, 0f, 0f, null)
+            var base: Bitmap? = null
+            val items = HashMap<String, ItemHr>()
+            var ok = true
+            try {
+                if (baseNeeds) {
+                    base = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    r.render(base, m)
+                }
+                val inv = Matrix().also { m.invert(it) }
+                for ((im, rc, im2) in jobs) {
+                    if (gen != hrGen) break
+                    val bmp = Bitmap.createBitmap(rc.width(), rc.height(), Bitmap.Config.ARGB_8888)
+                    ParcelFileDescriptor.open(File(im.file), ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                        PdfRenderer(pfd).use { pr ->
+                            pr.openPage(0).use { pg -> pg.render(bmp, null, im2, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY) }
                         }
-                        tmp.recycle()
                     }
-                } catch (e: Throwable) { ok = false }
-                post {
-                    if (ok && gen == hrGen && doc === d) {
-                        hires?.recycle()
-                        hires = bmp; hrDoc = d
-                        m.invert(hrInv)
-                        hrSigs = sigs
-                        invalidate()
-                    } else bmp.recycle()
+                    items[im.id] = ItemHr(bmp, rc.left.toFloat(), rc.top.toFloat(), inv, sig(im))
+                }
+            } catch (t: Throwable) { ok = false }
+            post {
+                if (ok && gen == hrGen && doc === d) {
+                    hires?.recycle()
+                    itemHr.values.forEach { it.bmp.recycle() }
+                    itemHr.clear()
+                    hires = base; hrDoc = d
+                    m.invert(hrInv)
+                    itemHr.putAll(items)
+                    invalidate()
+                } else {
+                    base?.recycle()
+                    items.values.forEach { it.bmp.recycle() }
                 }
             }
         }
@@ -279,20 +295,29 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.clipRect(page)
         d.overview?.let { if (!it.isRecycled) c.drawBitmap(it, null, page, bmpP) }
         val hr = hires
-        val hrValid = hr != null && hrDoc === d && !hr.isRecycled
-        if (hrValid) {
+        if (hr != null && hrDoc === d && !hr.isRecycled) {
             c.save()
             c.concat(hrInv)
-            c.drawBitmap(hr!!, 0f, 0f, bmpP)
+            // Die Vorschau darunter abdecken, sonst scheint sie an transparenten Stellen durch
+            fillP.color = d.bgColor
+            c.drawRect(0f, 0f, hr.width.toFloat(), hr.height.toFloat(), fillP)
+            c.drawBitmap(hr, 0f, 0f, bmpP)
             c.restore()
         }
-        val items = d.items
-        for (it in items) if (it is ImageItem && !(hrValid && it.isPdf && it.fixed && sig(it) in hrSigs)) drawImage(c, d, it)
-        for (it in items) {
+        // Alle Elemente in ihrer tatsächlichen Reihenfolge
+        for (it in d.items) {
             when (it) {
+                is ImageItem -> {
+                    val ih = itemHr[it.id]
+                    if (ih != null && ih.sig == sig(it) && it.fixed && !ih.bmp.isRecycled) {
+                        c.save()
+                        c.concat(ih.inv)
+                        c.drawBitmap(ih.bmp, ih.left, ih.top, bmpP)
+                        c.restore()
+                    } else drawImage(c, d, it)
+                }
                 is Stroke -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
-                else -> {}
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -324,6 +349,26 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 fillP.color = Pal.BLACK
                 c.drawCircle(ps[0], ps[1], 3f * dens, fillP)
                 c.drawCircle(ps[2], ps[3], 3f * dens, fillP)
+                measureText?.let { t -> label(c, t, (ps[0] + ps[2]) / 2f, (ps[1] + ps[3]) / 2f) }
+            }
+        }
+
+        sizePreview?.let { (color, dia) ->
+            val cx = width / 2f; val cy = height * 0.25f
+            val r = max(dia / 2f, 0.5f)
+            val bgR = max(r + 16f * dens, 36f * dens)
+            fillP.color = Pal.WHITE
+            c.drawRoundRect(cx - bgR, cy - bgR, cx + bgR, cy + bgR, 16f * dens, 16f * dens, fillP)
+            if (color == null) {
+                strokeP.color = Pal.BLACK; strokeP.strokeWidth = 1.5f * dens
+                c.drawCircle(cx, cy, r, strokeP)
+            } else {
+                fillP.color = color
+                c.drawCircle(cx, cy, r, fillP)
+                if (Color.red(color) > 200 && Color.green(color) > 200) {
+                    strokeP.color = Pal.GREY; strokeP.strokeWidth = 1f
+                    c.drawCircle(cx, cy, r, strokeP)
+                }
             }
         }
 
@@ -334,6 +379,26 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             c.drawCircle(eraserSX, eraserSY, eraserPx() / 2f, strokeP)
         }
     }
+
+    private fun label(c: Canvas, t: String, x: Float, y: Float) {
+        textP.textSize = 16f * dens
+        textP.isFakeBoldText = false
+        val tw = textP.measureText(t)
+        val padH = 10f * dens; val padV = 6f * dens
+        val fm = textP.fontMetrics
+        val th = fm.descent - fm.ascent
+        fillP.color = Pal.WHITE
+        c.drawRoundRect(x - tw / 2f - padH, y - th / 2f - padV, x + tw / 2f + padH, y + th / 2f + padV, 12f * dens, 12f * dens, fillP)
+        c.drawText(t, x, y - (fm.ascent + fm.descent) / 2f, textP)
+    }
+
+    /** Größenvorschau beim Verstellen des Reglers: Farbe (null = Radierer-Umriss) und Durchmesser in px. */
+    private var sizePreview: Pair<Int?, Float>? = null
+
+    fun showSizePreview(color: Int?, diameterPx: Float) { sizePreview = color to diameterPx; invalidate() }
+    fun hideSizePreview() { sizePreview = null; invalidate() }
+    fun penPx(widthPt: Float): Float = doc?.let { widthPt * scaleOf(it) } ?: widthPt * pxPerPt()
+    fun eraserPxFor(pct: Float): Float = pct / 100f * 0.25f * min(width, height)
 
     private fun visible(b: RectF, w: Float, v: RectF) =
         !(b.right + w < v.left || b.left - w > v.right || b.bottom + w < v.top || b.top - w > v.bottom)
@@ -901,7 +966,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 return
             }
             if (!tools.zoomLocked) {
-                var z = (g0zoom * span / g0span).coerceIn(0.1f, 32f)
+                var z = (g0zoom * span / g0span).coerceIn(0.15f, 30f)
                 if (abs(z - 1f) <= 0.03f) z = 1f
                 d.zoom = z
             }
@@ -912,7 +977,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     g0ang += 12f * sign(delta)
                     delta = angleDiff(ang, g0ang)
                 }
-                d.rot = if (rotating) snapTo(g0rot + delta, 45f, 5f) else g0rot
+                d.rot = if (rotating) snapTo(g0rot + delta, 45f, 3f).roundToInt().toFloat() % 360f else g0rot
             }
             place(d, g0px, g0py, cx, cy)
             viewChanged()
