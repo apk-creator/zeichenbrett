@@ -8,7 +8,7 @@ import android.net.Uri
 import java.io.File
 
 const val PT_PER_MM = 72f / 25.4f
-const val MAX_DOCS = 10
+const val MAX_DOCS = 15
 const val MAX_UNDO = 100
 
 object Pal {
@@ -46,6 +46,8 @@ class ToolState {
     var rulerY = 0f
     var rulerAngle = 0f
     var zoomLocked = false
+    var rotLocked = false
+    var eraseBackground = true
 }
 
 sealed class Item
@@ -128,6 +130,7 @@ class PageDoc(val id: String, val workDir: File) {
 
     // Ansicht
     var zoom = 1f
+    var rot = 0f
     var offX = 0f
     var offY = 0f
     var viewInit = false
@@ -146,6 +149,11 @@ class PageDoc(val id: String, val workDir: File) {
         undoStack.addLast(items)
         while (undoStack.size > MAX_UNDO) undoStack.removeFirst()
         redoStack.clear()
+    }
+
+    /** Letzten Undo-Schritt verwerfen (wenn eine Aktion nichts verändert hat). */
+    fun dropUndo() {
+        if (undoStack.isNotEmpty()) undoStack.removeLast()
     }
 
     fun undo(): Boolean {

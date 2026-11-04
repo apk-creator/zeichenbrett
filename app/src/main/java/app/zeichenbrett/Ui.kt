@@ -7,22 +7,35 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.drawable.GradientDrawable
+import android.text.TextPaint
+import android.text.TextUtils
+import android.util.TypedValue
 import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import kotlin.math.abs
 import kotlin.math.ln
+import kotlin.math.max
 import kotlin.math.pow
 
 fun Context.dp(v: Float): Float = v * resources.displayMetrics.density
 fun Context.dpi(v: Float): Int = (v * resources.displayMetrics.density + 0.5f).toInt()
 
-fun roundBg(ctx: Context, color: Int, radiusDp: Float = 10f) = GradientDrawable().apply {
+const val R_PANEL = 16f
+const val R_BUTTON = 12f
+
+fun roundBg(ctx: Context, color: Int, radiusDp: Float = R_PANEL) = GradientDrawable().apply {
     setColor(color)
     cornerRadius = ctx.dp(radiusDp)
 }
 
-/** Weiße Palette mit leicht gerundeten Ecken. */
+fun outlineBg(ctx: Context, radiusDp: Float = R_BUTTON) = GradientDrawable().apply {
+    setColor(Pal.WHITE)
+    setStroke(ctx.dpi(1.5f), Pal.BLACK)
+    cornerRadius = ctx.dp(radiusDp)
+}
+
+/** Weiße Palette mit gerundeten Ecken. */
 fun palette(ctx: Context, horizontal: Boolean): LinearLayout = LinearLayout(ctx).apply {
     orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
     background = roundBg(ctx, Pal.WHITE)
@@ -31,14 +44,18 @@ fun palette(ctx: Context, horizontal: Boolean): LinearLayout = LinearLayout(ctx)
     setPadding(p, p, p, p)
 }
 
-/** Paletten-Button: Symbol und/oder Text, invertiert wenn aktiv oder gedrückt. */
+/**
+ * Einheitlicher Button der ganzen App: Symbol und/oder Text, schwarz auf weiß,
+ * invertiert wenn aktiv oder gedrückt, grau wenn nicht verfügbar.
+ */
 @SuppressLint("ViewConstructor")
 class Btn(ctx: Context) : View(ctx) {
     var icon: String? = null
         set(v) { field = v; invalidate() }
     var iconFill: Int? = null
+    var iconScale = 1f
     var text: String? = null
-        set(v) { field = v; invalidate() }
+        set(v) { field = v; requestLayout(); invalidate() }
     var badge: String? = null
         set(v) { field = v; invalidate() }
     var active = false
@@ -47,15 +64,40 @@ class Btn(ctx: Context) : View(ctx) {
         set(v) { field = v; invalidate() }
     var grey = false
     var textScale = 0.3f
+    var textSp = 0f
+    var alignLeft = false
+    var multiLine = false
+    var bold = false
     var onTap: (() -> Unit)? = null
 
     private var down = false
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER }
+    private val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
+    private val pad = ctx.dp(12f)
 
     fun flash() {
         down = true; invalidate()
         postDelayed({ down = false; invalidate() }, 250)
+    }
+
+    private fun textSize(h: Float) =
+        if (textSp > 0f) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_SP, textSp, resources.displayMetrics) else h * textScale
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val hMode = MeasureSpec.getMode(heightMeasureSpec)
+        val h = if (hMode == MeasureSpec.EXACTLY) MeasureSpec.getSize(heightMeasureSpec) else context.dpi(48f)
+        val wMode = MeasureSpec.getMode(widthMeasureSpec)
+        val w = if (wMode == MeasureSpec.EXACTLY) MeasureSpec.getSize(widthMeasureSpec) else {
+            val tx = text
+            if (tx != null && icon == null) {
+                tp.textSize = textSize(h.toFloat())
+                tp.isFakeBoldText = bold
+                var want = (tp.measureText(tx) + 2 * pad + (if (badge != null) h * 0.4f else 0f)).toInt()
+                if (wMode == MeasureSpec.AT_MOST) want = minOf(want, MeasureSpec.getSize(widthMeasureSpec))
+                max(want, h)
+            } else h
+        }
+        setMeasuredDimension(w, h)
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -81,7 +123,7 @@ class Btn(ctx: Context) : View(ctx) {
         val inv = active || (down && enabledBtn)
         if (inv) {
             p.style = Paint.Style.FILL; p.color = Pal.BLACK
-            val r = context.dp(7f)
+            val r = context.dp(R_BUTTON)
             c.drawRoundRect(1f, 1f, w - 1f, h - 1f, r, r, p)
         }
         val fg = when {
@@ -91,26 +133,84 @@ class Btn(ctx: Context) : View(ctx) {
         }
         val ic = icon; val tx = text
         tp.color = fg
+        tp.isFakeBoldText = bold
         if (ic != null && tx != null) {
-            Icons.draw(c, ic, w / 2f, h * 0.38f, h * 0.46f, fg, iconFill, p, inv)
+            Icons.draw(c, ic, w / 2f, h * 0.38f, h * 0.46f, fg, iconFill, p)
             tp.textSize = h * 0.22f
+            tp.textAlign = Paint.Align.CENTER
             c.drawText(tx, w / 2f, h * 0.9f, tp)
         } else if (ic != null) {
-            Icons.draw(c, ic, w / 2f, h / 2f, h * 0.52f, fg, iconFill, p, inv)
+            Icons.draw(c, ic, w / 2f, h / 2f, h * 0.52f * iconScale, fg, iconFill, p)
         } else if (tx != null) {
-            tp.textSize = h * textScale
-            val b = badge
-            if (b != null) {
-                val tw = tp.measureText(tx)
-                val isz = h * 0.34f
-                val total = isz + context.dp(4f) + tw
-                val x0 = (w - total) / 2f
-                Icons.draw(c, b, x0 + isz / 2f, h / 2f, isz, fg, null, p, inv)
-                c.drawText(tx, x0 + isz + context.dp(4f) + tw / 2f, h / 2f - (tp.descent() + tp.ascent()) / 2f, tp)
-            } else {
-                c.drawText(tx, w / 2f, h / 2f - (tp.descent() + tp.ascent()) / 2f, tp)
+            drawLabel(c, tx, w, h)
+        }
+    }
+
+    private fun drawLabel(c: Canvas, tx: String, w: Float, h: Float) {
+        val size = textSize(h)
+        tp.textSize = size
+        var x0 = pad
+        var avail = w - 2 * pad
+        val b = badge
+        if (b != null) {
+            val isz = h * 0.34f
+            val tw = tp.measureText(tx)
+            val total = isz + context.dp(4f) + tw
+            val bx = if (alignLeft) pad else (w - total) / 2f
+            Icons.draw(c, b, bx + isz / 2f, h / 2f, isz, tp.color, null, p)
+            x0 = bx + isz + context.dp(4f)
+            avail = w - x0 - pad
+            tp.textAlign = Paint.Align.LEFT
+            c.drawText(tx, x0, h / 2f - (tp.descent() + tp.ascent()) / 2f, tp)
+            return
+        }
+        if (tp.measureText(tx) <= avail) {
+            line(c, tx, w, h / 2f)
+            return
+        }
+        if (multiLine) {
+            tp.textSize = size * 0.82f
+            val lines = split(tx, avail)
+            val lh = tp.fontSpacing * 0.95f
+            line(c, lines.first, w, h / 2f - lh / 2f)
+            line(c, lines.second, w, h / 2f + lh / 2f)
+            return
+        }
+        line(c, TextUtils.ellipsize(tx, tp, avail, TextUtils.TruncateAt.END).toString(), w, h / 2f)
+    }
+
+    private fun line(c: Canvas, s: String, w: Float, cy: Float) {
+        val y = cy - (tp.descent() + tp.ascent()) / 2f
+        if (alignLeft) {
+            tp.textAlign = Paint.Align.LEFT
+            c.drawText(s, pad, y, tp)
+        } else {
+            tp.textAlign = Paint.Align.CENTER
+            c.drawText(s, w / 2f, y, tp)
+        }
+    }
+
+    /** Teilt an Leer-/Trennzeichen möglichst mittig, sonst nach Breite; zweite Zeile wird bei Bedarf gekürzt. */
+    private fun split(tx: String, avail: Float): Pair<String, String> {
+        var best = -1
+        for (i in tx.indices) {
+            if (tx[i] == ' ' || tx[i] == '_' || tx[i] == '-') {
+                if (tp.measureText(tx, 0, i + 1) <= avail &&
+                    (best < 0 || abs(i - tx.length / 2) < abs(best - tx.length / 2))) best = i
             }
         }
+        val first: String
+        val rest: String
+        if (best > 0) {
+            first = tx.substring(0, best + 1).trimEnd()
+            rest = tx.substring(best + 1).trimStart()
+        } else {
+            val n = tp.breakText(tx, true, avail, null).coerceAtLeast(1)
+            first = tx.substring(0, n)
+            rest = tx.substring(n)
+        }
+        val second = TextUtils.ellipsize(rest, tp, avail, TextUtils.TruncateAt.END).toString()
+        return first to second
     }
 }
 
@@ -118,7 +218,7 @@ class Btn(ctx: Context) : View(ctx) {
 object Icons {
     private val path = Path()
 
-    fun draw(c: Canvas, name: String, cx: Float, cy: Float, size: Float, fg: Int, fill: Int?, p: Paint, inverted: Boolean) {
+    fun draw(c: Canvas, name: String, cx: Float, cy: Float, size: Float, fg: Int, fill: Int?, p: Paint) {
         c.save()
         c.translate(cx - size / 2f, cy - size / 2f)
         c.scale(size / 24f, size / 24f)
@@ -129,8 +229,12 @@ object Icons {
         p.color = fg
         path.reset()
         when (name) {
-            "fold" -> {
-                path.moveTo(2f, 17f); path.lineTo(7f, 7f); path.lineTo(12f, 17f); path.lineTo(17f, 7f); path.lineTo(22f, 17f)
+            "dim" -> {
+                c.drawLine(3f, 7f, 3f, 17f, p)
+                c.drawLine(21f, 7f, 21f, 17f, p)
+                c.drawLine(3.5f, 12f, 20.5f, 12f, p)
+                path.moveTo(7.5f, 9f); path.lineTo(3.8f, 12f); path.lineTo(7.5f, 15f)
+                path.moveTo(16.5f, 9f); path.lineTo(20.2f, 12f); path.lineTo(16.5f, 15f)
                 c.drawPath(path, p)
             }
             "pen" -> {
@@ -192,10 +296,12 @@ object Icons {
                 c.drawPath(path, p)
             }
             "rotate" -> {
-                path.addArc(RectF(5f, 5f, 19f, 19f), -70f, 290f)
+                // Kreisbogen im Uhrzeigersinn von oben bis links, Pfeilspitze zeigt nach oben
+                path.addArc(RectF(5f, 5f, 19f, 19f), -90f, 270f)
                 c.drawPath(path, p)
                 path.reset()
-                path.moveTo(16.5f, 2.5f); path.lineTo(15f, 6.5f); path.lineTo(19f, 8f)
+                path.moveTo(5f, 9f); path.lineTo(2.2f, 13.2f); path.lineTo(7.8f, 13.2f); path.close()
+                p.style = Paint.Style.FILL
                 c.drawPath(path, p)
             }
         }
@@ -203,21 +309,37 @@ object Icons {
     }
 }
 
-/** Stufenloser Regler mit logarithmischer Skala und Fangpunkten. */
+/**
+ * Stufenloser Regler. Die Fangpunkte (inkl. Minimum und Maximum) liegen gleichmäßig verteilt,
+ * dazwischen wird logarithmisch interpoliert.
+ */
 @SuppressLint("ViewConstructor")
 class SliderView(
     ctx: Context,
-    private val min: Float,
-    private val max: Float,
-    private val snaps: FloatArray,
+    private val anchors: FloatArray,
     var value: Float,
     private val onChange: (Float) -> Unit,
 ) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pad = ctx.dp(14f)
+    private val segs = anchors.size - 1
 
-    private fun pos(v: Float) = (ln(v / min) / ln(max / min)).coerceIn(0f, 1f)
-    private fun valAt(t: Float) = min * (max / min).pow(t)
+    private fun pos(v: Float): Float {
+        if (v <= anchors[0]) return 0f
+        for (i in 0 until segs) {
+            val a = anchors[i]; val b = anchors[i + 1]
+            if (v <= b) return (i + ln(v / a) / ln(b / a)) / segs
+        }
+        return 1f
+    }
+
+    private fun valAt(t: Float): Float {
+        val x = (t * segs).coerceIn(0f, segs.toFloat())
+        val i = x.toInt().coerceAtMost(segs - 1)
+        val f = x - i
+        val a = anchors[i]; val b = anchors[i + 1]
+        return a * (b / a).pow(f)
+    }
 
     override fun onDraw(c: Canvas) {
         val w = width - 2 * pad
@@ -227,8 +349,8 @@ class SliderView(
         p.color = Pal.GREY; p.strokeWidth = context.dp(3f)
         c.drawLine(pad, y, pad + w, y, p)
         p.color = Pal.BLACK; p.strokeWidth = context.dp(1.5f)
-        for (s in snaps) {
-            val x = pad + pos(s) * w
+        for (i in 0..segs) {
+            val x = pad + i.toFloat() / segs * w
             c.drawLine(x, y - context.dp(8f), x, y + context.dp(8f), p)
         }
         p.style = Paint.Style.FILL
@@ -241,7 +363,7 @@ class SliderView(
         val t = ((e.x - pad) / w).coerceIn(0f, 1f)
         var v = valAt(t)
         val tol = context.dp(10f)
-        for (s in snaps) if (abs(pos(s) * w - t * w) <= tol) { v = s; break }
+        for (i in 0..segs) if (abs(i.toFloat() / segs * w - t * w) <= tol) { v = anchors[i]; break }
         value = v
         onChange(v)
         invalidate()

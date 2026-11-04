@@ -79,6 +79,57 @@ object Img {
         return BitmapFactory.decodeFile(f.path, BitmapFactory.Options().apply { inSampleSize = sample })
     }
 
+    /** Auflösung aus den Bild-Metadaten (JFIF, EXIF oder PNG pHYs); null wenn nicht angegeben. */
+    fun readDpi(f: File, isJpeg: Boolean): Int? = try {
+        if (isJpeg) jpegDpi(f) else pngDpi(f)
+    } catch (e: Exception) { null }
+
+    private fun jpegDpi(f: File): Int? {
+        val b = f.inputStream().use { s -> ByteArray(65536).let { buf -> val n = s.read(buf); if (n > 0) buf.copyOf(n) else ByteArray(0) } }
+        var i = 2
+        while (i + 4 < b.size && (b[i].toInt() and 0xFF) == 0xFF) {
+            val marker = b[i + 1].toInt() and 0xFF
+            val len = ((b[i + 2].toInt() and 0xFF) shl 8) or (b[i + 3].toInt() and 0xFF)
+            if (marker == 0xE0 && i + 16 < b.size && String(b, i + 4, 4, Charsets.ISO_8859_1) == "JFIF") {
+                val units = b[i + 11].toInt() and 0xFF
+                val xd = ((b[i + 12].toInt() and 0xFF) shl 8) or (b[i + 13].toInt() and 0xFF)
+                if (xd > 1 && units == 1) return xd
+                if (xd > 1 && units == 2) return (xd * 2.54f).roundToInt()
+            }
+            if (marker == 0xDA) break
+            i += 2 + len
+        }
+        val ex = ExifInterface(f.path)
+        val xr = ex.getAttribute(ExifInterface.TAG_X_RESOLUTION) ?: return null
+        val unit = ex.getAttributeInt(ExifInterface.TAG_RESOLUTION_UNIT, 2)
+        val parts = xr.split('/')
+        val v = if (parts.size == 2) parts[0].toDouble() / parts[1].toDouble() else xr.toDouble()
+        if (v <= 1.0) return null
+        return (if (unit == 3) v * 2.54 else v).roundToInt()
+    }
+
+    private fun pngDpi(f: File): Int? {
+        f.inputStream().use { s ->
+            val b = ByteArray(65536)
+            val n = s.read(b)
+            var i = 8
+            while (i + 8 <= n) {
+                val len = ((b[i].toInt() and 0xFF) shl 24) or ((b[i + 1].toInt() and 0xFF) shl 16) or
+                    ((b[i + 2].toInt() and 0xFF) shl 8) or (b[i + 3].toInt() and 0xFF)
+                val type = String(b, i + 4, 4, Charsets.ISO_8859_1)
+                if (type == "pHYs" && i + 17 <= n) {
+                    val ppu = ((b[i + 8].toInt() and 0xFF) shl 24) or ((b[i + 9].toInt() and 0xFF) shl 16) or
+                        ((b[i + 10].toInt() and 0xFF) shl 8) or (b[i + 11].toInt() and 0xFF)
+                    val unit = b[i + 16].toInt() and 0xFF
+                    return if (unit == 1 && ppu > 0) (ppu * 0.0254).roundToInt() else null
+                }
+                if (type == "IDAT" || len < 0) break
+                i += 12 + len
+            }
+        }
+        return null
+    }
+
     /** Hellster Bildpunkt (transparente Bereiche zählen als Weiß). */
     fun brightest(b: Bitmap): Int {
         val w = b.width; val h = b.height
