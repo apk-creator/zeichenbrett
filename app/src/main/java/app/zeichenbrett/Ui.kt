@@ -113,8 +113,26 @@ class Btn(ctx: Context) : View(ctx) {
     /** Tippen und 0,5 s halten. */
     var onLong: (() -> Unit)? = null
     private var longFired = false
+    /** Halten startet Ziehen: Start, Bewegung und Ende in Bildschirmkoordinaten. */
+    var onDragStart: ((Float, Float) -> Unit)? = null
+    var onDragMove: ((Float, Float) -> Unit)? = null
+    var onDragEnd: ((Float, Float, Boolean) -> Unit)? = null
+    private var dragging = false
+    private var rawX = 0f
+    private var rawY = 0f
+    private var downX = 0f
+    private var downY = 0f
     private val longRun = Runnable {
-        if (down) { longFired = true; down = false; invalidate(); onLong?.invoke() }
+        if (down) {
+            longFired = true; down = false; invalidate()
+            val ds = onDragStart
+            if (ds != null) {
+                dragging = true
+                parent?.requestDisallowInterceptTouchEvent(true)
+                performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
+                ds(rawX, rawY)
+            } else onLong?.invoke()
+        }
     }
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tp = TextPaint(Paint.ANTI_ALIAS_FLAG)
@@ -149,20 +167,30 @@ class Btn(ctx: Context) : View(ctx) {
     override fun onTouchEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                down = true; longFired = false; invalidate()
-                if (onLong != null) postDelayed(longRun, 500)
+                down = true; longFired = false; dragging = false; invalidate()
+                rawX = e.rawX; rawY = e.rawY; downX = e.x; downY = e.y
+                if (onLong != null || onDragStart != null) postDelayed(longRun, 500)
             }
             MotionEvent.ACTION_MOVE -> {
+                rawX = e.rawX; rawY = e.rawY
+                if (dragging) { onDragMove?.invoke(rawX, rawY); return true }
+                if (kotlin.math.hypot(e.x - downX, e.y - downY) > context.dp(10f)) removeCallbacks(longRun)
                 val inside = e.x >= 0 && e.y >= 0 && e.x <= width && e.y <= height
                 if (inside != down) { down = inside; invalidate(); if (!inside) removeCallbacks(longRun) }
             }
             MotionEvent.ACTION_UP -> {
+                rawX = e.rawX; rawY = e.rawY
+                removeCallbacks(longRun)
+                if (dragging) { dragging = false; onDragEnd?.invoke(rawX, rawY, false); return true }
                 val was = down
                 down = false; invalidate()
-                removeCallbacks(longRun)
                 if (was && enabledBtn && !longFired) onTap?.invoke()
             }
-            MotionEvent.ACTION_CANCEL -> { down = false; removeCallbacks(longRun); invalidate() }
+            MotionEvent.ACTION_CANCEL -> {
+                removeCallbacks(longRun)
+                if (dragging) { dragging = false; onDragEnd?.invoke(rawX, rawY, true) }
+                down = false; invalidate()
+            }
         }
         return true
     }

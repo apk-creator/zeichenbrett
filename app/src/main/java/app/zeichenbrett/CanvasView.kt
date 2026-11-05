@@ -149,6 +149,45 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         return 0.12f
     }
 
+    private var settleAnim: android.animation.ValueAnimator? = null
+
+    /**
+     * Zeichenfläche im Bild halten: Punkt n = nächster Seitenpunkt zur Bildschirmmitte M.
+     * Liegt n weiter als 50 % der Strecke M → Bildschirmrand (durch n) von M entfernt,
+     * springt die Seite zurück, bis n genau bei 50 % liegt.
+     */
+    fun settle() {
+        val d = doc ?: return
+        val w = width.toFloat(); val h = height.toFloat()
+        if (w <= 0f || h <= 0f) return
+        val cx = w / 2f; val cy = h / 2f
+        val c = toDoc(d, cx, cy)
+        val nxDoc = c.x.coerceIn(0f, d.pageW); val nyDoc = c.y.coerceIn(0f, d.pageH)
+        if (nxDoc == c.x && nyDoc == c.y) return
+        val n = toScreen(d, nxDoc, nyDoc)
+        val dx = n.x - cx; val dy = n.y - cy
+        var tEdge = Float.MAX_VALUE
+        if (dx > 0f) tEdge = min(tEdge, (w - cx) / dx) else if (dx < 0f) tEdge = min(tEdge, -cx / dx)
+        if (dy > 0f) tEdge = min(tEdge, (h - cy) / dy) else if (dy < 0f) tEdge = min(tEdge, -cy / dy)
+        if (tEdge == Float.MAX_VALUE || 1f / tEdge <= 0.5f) return
+        val k = 0.5f * tEdge - 1f
+        val sx = d.offX; val sy = d.offY
+        val tx = sx + dx * k; val ty = sy + dy * k
+        settleAnim?.cancel()
+        settleAnim = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 220
+            interpolator = android.view.animation.DecelerateInterpolator()
+            addUpdateListener {
+                if (doc === d) {
+                    val f = it.animatedValue as Float
+                    d.offX = sx + (tx - sx) * f; d.offY = sy + (ty - sy) * f
+                    viewChanged()
+                }
+            }
+            start()
+        }
+    }
+
     /** 100 % und Seite mittig auf dem Bildschirm. */
     fun zoom100Centered() {
         val d = doc ?: return
@@ -651,8 +690,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 fCount = 0
                 if (isPen(e, 0)) {
                     lastPenSeen = SystemClock.uptimeMillis()
+                    settleAnim?.cancel()
                     mode = Mode.PEN; penDown(d, e, 0)
                 } else {
+                    settleAnim?.cancel()
                     tapStart(d, e)
                     fingerStartT = SystemClock.uptimeMillis()
                     if (penBlocksFingers() || isPalm(e, 0)) { mode = Mode.IGNORE; tapValid = false }
@@ -703,7 +744,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     penUp(d, e, 0)
                 } else if (mode == Mode.FINGER) {
                     if (canceledByPalm(e)) rejectFingers(d)
-                    else { fingersChanged(d, e, 0); tapEnd(d) }
+                    else { fingersChanged(d, e, 0); tapEnd(d); settle() }
                 }
                 mode = Mode.NONE
             }

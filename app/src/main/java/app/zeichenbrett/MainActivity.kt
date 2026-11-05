@@ -192,6 +192,8 @@ class MainActivity : Activity(), CanvasView.Host {
             val uri = i.data!!
             i.data = null
             i.action = null
+            dismissPopup()
+            for (pn in panels.toList()) if (pn !== busyPanel) closePanel(pn)
             openFile(uri, persist = false)
             return true
         }
@@ -305,7 +307,7 @@ class MainActivity : Activity(), CanvasView.Host {
     private fun updateBlur() {
         if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.S) return
         val r = dp(10f)
-        val effect = if (panels.isNotEmpty()) android.graphics.RenderEffect.createBlurEffect(r, r, android.graphics.Shader.TileMode.CLAMP) else null
+        val effect = if (panels.isNotEmpty() || drag != null) android.graphics.RenderEffect.createBlurEffect(r, r, android.graphics.Shader.TileMode.CLAMP) else null
         stage.setRenderEffect(effect)
     }
 
@@ -473,7 +475,11 @@ class MainActivity : Activity(), CanvasView.Host {
     private var docArrow: Btn? = null
     private var docSlot = 0
 
+    private var docMarkW = 0
+    private var docBarSlots = 5
+
     private fun rebuildDocBar() {
+        if (drag != null) return
         docBar.removeAllViews()
         docArrow = null
         val d = active
@@ -494,6 +500,8 @@ class MainActivity : Activity(), CanvasView.Host {
         val slot = if (portrait) (avail - btnSize - gap).coerceAtLeast(btnSize)
             else ((avail - btnSize - gap * 5) / 5).coerceAtLeast(btnSize)
         docSlot = slot
+        docMarkW = markW
+        docBarSlots = if (portrait) 1 else 5
 
         val idx = docs.indexOf(d)
         val shown: List<PageDoc> = when {
@@ -508,8 +516,10 @@ class MainActivity : Activity(), CanvasView.Host {
                 textSp = 16f
                 alignLeft = true
                 active = doc === d
-                onTap = { activate(doc) }
-                onLong = { renameDialog(doc) }
+                onTap = { labelTap(doc) }
+                onDragStart = { x, y -> startDrag(doc, true, x, y) }
+                onDragMove = { x, y -> dragMove(x, y) }
+                onDragEnd = { x, y, c -> dragEnd(x, y, c) }
             }
             docBar.addView(b, LinearLayout.LayoutParams(slot, btnSize).apply { marginEnd = gap })
         }
@@ -522,6 +532,170 @@ class MainActivity : Activity(), CanvasView.Host {
             docArrow = arrow
             docBar.addView(arrow, LinearLayout.LayoutParams(btnSize, btnSize))
         }
+    }
+
+    // ---- Doppeltipp auf ein Titellabel = Umbenennen
+
+    private var lastLabelDoc: PageDoc? = null
+    private var lastLabelT = 0L
+
+    private fun labelTap(doc: PageDoc) {
+        val now = android.os.SystemClock.uptimeMillis()
+        if (lastLabelDoc === doc && now - lastLabelT < 350) {
+            lastLabelDoc = null
+            renameDialog(doc)
+        } else {
+            lastLabelDoc = doc; lastLabelT = now
+            if (active !== doc) activate(doc)
+        }
+    }
+
+    // ---- Titel per Ziehen neu anordnen, auf „X“ ablegen = schließen
+
+    private inner class Drag(val doc: PageDoc, val fromDropdown: Boolean) {
+        val layer = FrameLayout(this@MainActivity)
+        val bar = palette(this@MainActivity, true)
+        val xPal = palette(this@MainActivity, true)
+        val xBtn = Btn(this@MainActivity).apply { icon = "close" }
+        val ghost = Btn(this@MainActivity)
+        val slots = ArrayList<View>()
+        var placeholder = -1
+        var pending = -1
+        var pendingRun: Runnable? = null
+        var overX = false
+        var inBar = false
+        var hoverIdx = -1
+        val origin = IntArray(2)
+    }
+
+    private var drag: Drag? = null
+
+    /** Reihenfolge ohne das gezogene Dokument, mit Lücke an der Platzhalterstelle. */
+    private fun fillDragBar(g: Drag) {
+        g.bar.removeAllViews(); g.slots.clear()
+        val gap = dpi(4f)
+        g.bar.addView(android.widget.ImageView(this).apply {
+            setImageResource(R.drawable.ic_app_mark)
+            scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+        }, LinearLayout.LayoutParams(docMarkW, btnSize).apply { marginStart = dpi(6f); marginEnd = dpi(10f) })
+        val order = docs.filter { it !== g.doc }
+        var k = 0
+        for (i in 0 until docBarSlots) {
+            val v: View = if (i == g.placeholder) View(this) else {
+                val doc = order.getOrNull(k++)
+                if (doc == null) View(this) else Btn(this).apply {
+                    text = labelText(doc); textSp = 16f; alignLeft = true; active = doc === active
+                }
+            }
+            g.bar.addView(v, LinearLayout.LayoutParams(docSlot, btnSize).apply { marginEnd = gap })
+            g.slots.add(v)
+        }
+        g.bar.addView(Btn(this).apply { icon = if (docs.size > docBarSlots) "chevron" else "plus" }, LinearLayout.LayoutParams(btnSize, btnSize))
+    }
+
+    private fun startDrag(doc: PageDoc, fromBar: Boolean, rawX: Float, rawY: Float) {
+        if (drag != null) return
+        lastLabelDoc = null
+        val g = Drag(doc, !fromBar)
+        drag = g
+        root.getLocationOnScreen(g.origin)
+        if (fromBar) {
+            val idx = docs.indexOf(doc)
+            if (idx in 0 until docBarSlots) g.placeholder = idx
+        }
+        // Titelleiste als Kopie über der weichgezeichneten Bühne
+        fillDragBar(g)
+        g.layer.addView(g.bar, FrameLayout.LayoutParams(docBar.width, docBar.height).apply {
+            gravity = Gravity.TOP or Gravity.START; leftMargin = docBar.left; topMargin = docBar.top
+        })
+        // „X“ der Einstellungspalette an derselben Stelle
+        val bl = IntArray(2); val rl = IntArray(2)
+        bClose.getLocationInWindow(bl); root.getLocationInWindow(rl)
+        val pad = setBar.paddingTop
+        g.xPal.addView(g.xBtn, LinearLayout.LayoutParams(bClose.width, bClose.height))
+        g.layer.addView(g.xPal, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = bl[0] - rl[0] - pad; topMargin = bl[1] - rl[1] - pad
+        })
+        // Gezogenes Label
+        g.ghost.text = labelText(doc); g.ghost.textSp = 16f; g.ghost.alignLeft = true; g.ghost.active = true
+        val ins = shadowInset(this)
+        val ghostBox = FrameLayout(this).apply {
+            background = ShadowBg(this@MainActivity)
+            setPadding(ins, ins, ins, ins)
+            addView(g.ghost, FrameLayout.LayoutParams(docSlot, btnSize))
+        }
+        g.layer.addView(ghostBox, FrameLayout.LayoutParams(docSlot + 2 * ins, btnSize + 2 * ins).apply { gravity = Gravity.TOP or Gravity.START })
+        root.addView(g.layer, root.indexOfChild(stage) + 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        docBar.alpha = 0f
+        popup?.alpha = 0f
+        updateBlur()
+        dragMove(rawX, rawY)
+    }
+
+    private fun dragMove(rawX: Float, rawY: Float) {
+        val g = drag ?: return
+        val x = rawX - g.origin[0]; val y = rawY - g.origin[1]
+        val gb = g.ghost.parent as View
+        gb.translationX = x - gb.width / 2f
+        gb.translationY = y - gb.height / 2f
+        // Über dem „X“?
+        val xl = IntArray(2); val rl = IntArray(2)
+        g.xBtn.getLocationInWindow(xl); root.getLocationInWindow(rl)
+        val m = dpi(12f)
+        g.overX = x >= xl[0] - rl[0] - m && x <= xl[0] - rl[0] + g.xBtn.width + m &&
+            y >= xl[1] - rl[1] - m && y <= xl[1] - rl[1] + g.xBtn.height + m
+        g.xBtn.active = g.overX
+        // Über der Titelleiste? Nächster Platz nach x
+        g.inBar = !g.overX && y >= docBar.top - btnSize / 2 && y <= docBar.bottom + btnSize / 2 && x <= docBar.right + btnSize
+        g.hoverIdx = -1
+        if (g.inBar) {
+            var best = 0; var bestD = Float.MAX_VALUE
+            for ((i, v) in g.slots.withIndex()) {
+                val cx = g.bar.left + v.left + v.width / 2f
+                val dd = kotlin.math.abs(cx - x)
+                if (dd < bestD) { bestD = dd; best = i }
+            }
+            g.hoverIdx = best
+        }
+        // Kurz verharren: Platz frei machen
+        if (g.hoverIdx != g.pending) {
+            g.pendingRun?.let { ui.removeCallbacks(it) }
+            g.pending = g.hoverIdx
+            if (g.hoverIdx >= 0 && g.hoverIdx != g.placeholder) {
+                val r = Runnable {
+                    if (drag === g && g.pending == g.hoverIdx) { g.placeholder = g.hoverIdx; fillDragBar(g) }
+                }
+                g.pendingRun = r
+                ui.postDelayed(r, 250)
+            }
+        }
+    }
+
+    private fun dragEnd(rawX: Float, rawY: Float, cancelled: Boolean) {
+        val g = drag ?: return
+        dragMove(rawX, rawY)
+        g.pendingRun?.let { ui.removeCallbacks(it) }
+        root.removeView(g.layer)
+        docBar.alpha = 1f
+        drag = null
+        updateBlur()
+        if (g.fromDropdown) dismissPopup()
+        if (!cancelled) {
+            if (g.overX) {
+                rebuildDocBar()
+                closeDoc(g.doc)
+                return
+            }
+            if (g.inBar) {
+                val target = if (g.placeholder >= 0) g.placeholder else g.hoverIdx
+                if (target >= 0) {
+                    docs.remove(g.doc)
+                    docs.add(target.coerceAtMost(docs.size), g.doc)
+                }
+            }
+        }
+        rebuildDocBar()
     }
 
     private fun renameDialog(d: PageDoc) {
@@ -561,7 +735,9 @@ class MainActivity : Activity(), CanvasView.Host {
                 alignLeft = true
                 active = doc === d
                 onTap = { dismissPopup(); activate(doc) }
-                onLong = { dismissPopup(); renameDialog(doc) }
+                onDragStart = { x, y -> startDrag(doc, false, x, y) }
+                onDragMove = { x, y -> dragMove(x, y) }
+                onDragEnd = { x, y, c -> dragEnd(x, y, c) }
             }
             b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.makeMeasureSpec(rowH, View.MeasureSpec.EXACTLY))
             longest = max(longest, b.measuredWidth)
@@ -1265,7 +1441,7 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         val buttons = ArrayList<Pair<String, () -> Unit>>()
         buttons.add("Abbrechen" to {})
-        if (canOverwrite) buttons.add("Dokument überschreiben" to { go(false) })
+        if (canOverwrite) buttons.add("Überschreiben" to { go(false) })
         buttons.add("Speichern unter" to { go(true) })
         showPanel(
             "„${d.title}“ speichern",
