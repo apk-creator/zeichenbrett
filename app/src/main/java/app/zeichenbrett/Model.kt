@@ -55,6 +55,8 @@ class ToolState {
     val fillMode = BooleanArray(5)
     /** Füllen: Toleranz in % (100 % = 10 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
     var fillPct = 5f
+    /** Füllen: Linien des Hintergrunds (PDF, Importe) als Grenzen berücksichtigen. */
+    var fillBackground = false
     val fillTol get() = fillPct / 10f
 }
 

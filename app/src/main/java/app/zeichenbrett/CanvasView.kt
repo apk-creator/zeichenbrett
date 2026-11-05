@@ -881,8 +881,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val items = d.items
         val color = Pal.PENS[tools.pen]
         val tol = tools.fillTol
+        val withBg = tools.fillBackground
         Thread {
-            val res = try { computeFill(items, d.pageW, d.pageH, px, py, tol) } catch (e: Throwable) {
+            val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg) } catch (e: Throwable) {
                 FillAlgo.Result(null, "Füllen nicht möglich.")
             }
             post {
@@ -908,7 +909,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }.start()
     }
 
-    private fun computeFill(items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float): FillAlgo.Result {
+    private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean): FillAlgo.Result {
         // Auflösung: 0,25 pt je Pixel, bei großer Toleranz gröber (Toleranz ≈ 8 px).
         // Ausschnitte wachsen, zuletzt die ganze Seite (ggf. gröber).
         val base = max(0.25f, tol / 8f)
@@ -953,6 +954,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val raw = buf.array()
             val under = ByteArray(w * h)
             for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) under[o + x] = raw[r + x] }
+            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top)
             val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
             val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
             // Lücken kleiner als die Toleranz schließen: Linien um je tol/2 verdicken
@@ -968,6 +970,57 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (r.error != FillAlgo.LEAK) break
         }
         return last ?: FillAlgo.Result(null, "Hier ist keine freie Fläche.")
+    }
+
+    /**
+     * Hintergrund (PDF-Seite, Importe, Abdeckungen) rastern; alles, was sich deutlich von der
+     * Zeichenflächenfarbe abhebt, wird zur Grenze. Die Füllung reicht nicht darunter (Wert 1).
+     */
+    private fun backgroundBarriers(d: PageDoc, items: List<Item>, under: ByteArray, w: Int, h: Int, ppt: Float, left: Float, top: Float) {
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        try {
+            val m = Matrix().apply { setScale(ppt, ppt); postTranslate(-left * ppt, -top * ppt) }
+            d.renderer?.submit { d.renderer?.render(bmp, m) }?.get()
+            val cv = Canvas(bmp)
+            cv.concat(m)
+            val pp = Paint(Paint.FILTER_BITMAP_FLAG)
+            val fp = Paint().apply { style = Paint.Style.FILL }
+            val sp = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND }
+            for (it in items) {
+                when (it) {
+                    is ImageItem -> {
+                        cv.save()
+                        cv.translate(it.cx, it.cy); cv.rotate(it.angle)
+                        val dst = RectF(-it.w / 2f, -it.h / 2f, it.w / 2f, it.h / 2f)
+                        val b = d.bitmaps[it.id]
+                        if (b != null && !b.isRecycled) cv.drawBitmap(b, null, dst, pp)
+                        cv.restore()
+                    }
+                    is Cover -> {
+                        sp.color = d.bgColor; sp.strokeWidth = it.width; fp.color = d.bgColor
+                        if (it.pts.size == 2) cv.drawCircle(it.pts[0], it.pts[1], it.width / 2f, fp) else cv.drawPath(it.path, sp)
+                    }
+                    else -> {}
+                }
+            }
+            // Zeichenflächenfarbe hinter alles legen (transparente Stellen)
+            val bgP = Paint().apply { color = d.bgColor; xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.DST_OVER) }
+            Canvas(bmp).drawRect(0f, 0f, w.toFloat(), h.toFloat(), bgP)
+            val row = IntArray(w)
+            val br = Color.red(d.bgColor); val bgg = Color.green(d.bgColor); val bb = Color.blue(d.bgColor)
+            for (y in 0 until h) {
+                bmp.getPixels(row, 0, w, 0, y, w, 1)
+                val o = y * w
+                for (x in 0 until w) {
+                    if (under[o + x].toInt() != 0) continue
+                    val c = row[x]
+                    val diff = max(abs(Color.red(c) - br), max(abs(Color.green(c) - bgg), abs(Color.blue(c) - bb)))
+                    if (diff > 32) under[o + x] = 1
+                }
+            }
+        } finally {
+            bmp.recycle()
+        }
     }
 
     private fun startDraw(dx: Float, dy: Float, x: Float, y: Float) {

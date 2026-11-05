@@ -1006,6 +1006,14 @@ class MainActivity : Activity(), CanvasView.Host {
             }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
             box.addView(label, LinearLayout.LayoutParams((btnSize * 1.8f).roundToInt(), btnSize))
+            if (k != T_ERASER && tools.fillMode[k - T_PEN0]) {
+                // Füllen: Hintergrund ignorieren (aktiv) oder als Grenze berücksichtigen
+                val bg = Btn(this)
+                bg.icon = "nobg"
+                bg.active = !tools.fillBackground
+                bg.onTap = { tools.fillBackground = !tools.fillBackground; bg.active = !tools.fillBackground }
+                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize))
+            }
             if (k == T_ERASER) {
                 val bg = Btn(this)
                 bg.icon = "nobg"
