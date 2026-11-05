@@ -880,8 +880,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         filling = true
         val items = d.items
         val color = Pal.PENS[tools.pen]
-        val tol = tools.fillTol
-        val withBg = tools.fillBackground
+        val tol = tools.fillTol(tools.pen)
+        val withBg = tools.fillBackground[tools.pen]
         Thread {
             val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg) } catch (e: Throwable) {
                 FillAlgo.Result(null, "Füllen nicht möglich.")
@@ -964,12 +964,70 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 left > eps, top > eps, left + wPt < pw - eps, top + hPt < ph - eps)
             if (r.polys != null) {
                 val polys = r.polys.map { p -> FloatArray(p.size) { i -> if (i % 2 == 0) left + p[i] * res else top + p[i] * res } }
-                return FillAlgo.Result(polys, null)
+                snapToStrokes(polys, strokes, res)
+                return FillAlgo.Result(polys.map { FillAlgo.simplify(it, 0.3f * res) }.filter { it.size >= 6 }, null)
             }
             last = r
             if (r.error != FillAlgo.LEAK) break
         }
         return last ?: FillAlgo.Result(null, "Hier ist keine freie Fläche.")
+    }
+
+    /**
+     * Umrisspunkte, die nahe an einem eigenen Strich liegen, exakt auf dessen Mittellinie setzen.
+     * So verläuft die Füllkante vektorgenau unter der Linie statt entlang der Rasterpixel.
+     */
+    private fun snapToStrokes(polys: List<FloatArray>, strokes: List<Stroke>, res: Float) {
+        val cell = max(2f, res * 8f)
+        val grid = HashMap<Long, MutableList<Int>>()     // Zelle → Segmente (Strich-Index shl 32 | Punkt-Index)
+        val segs = ArrayList<Long>()
+        fun key(cx: Int, cy: Int) = (cx.toLong() shl 32) or (cy.toLong() and 0xffffffffL)
+        val bb = RectF()
+        polys.forEachIndexed { i, p -> if (i == 0) bb.set(boundsOf(p)) else bb.union(boundsOf(p)) }
+        bb.inset(-cell, -cell)
+        for ((si, st) in strokes.withIndex()) {
+            if (!RectF.intersects(st.bounds, bb) && !bb.contains(st.bounds)) continue
+            val p = st.pts
+            val n = p.size / 2
+            val m = st.width / 2f + 2f * res
+            for (j in 0 until max(1, n - 1)) {
+                val x0 = p[2 * j]; val y0 = p[2 * j + 1]
+                val x1 = if (n > 1) p[2 * j + 2] else x0; val y1 = if (n > 1) p[2 * j + 3] else y0
+                val id = segs.size
+                segs.add((si.toLong() shl 32) or j.toLong())
+                val cx0 = floor((min(x0, x1) - m) / cell).toInt(); val cx1 = floor((max(x0, x1) + m) / cell).toInt()
+                val cy0 = floor((min(y0, y1) - m) / cell).toInt(); val cy1 = floor((max(y0, y1) + m) / cell).toInt()
+                if ((cx1 - cx0 + 1).toLong() * (cy1 - cy0 + 1) > 4096) continue
+                for (gx in cx0..cx1) for (gy in cy0..cy1) grid.getOrPut(key(gx, gy)) { ArrayList(4) }.add(id)
+            }
+        }
+        if (grid.isEmpty()) return
+        for (p in polys) {
+            var i = 0
+            while (i + 1 < p.size) {
+                val x = p[i]; val y = p[i + 1]
+                val list = grid[key(floor(x / cell).toInt(), floor(y / cell).toInt())]
+                if (list != null) {
+                    var bd = Float.MAX_VALUE; var bx = x; var by = y
+                    for (id in list) {
+                        val sg = segs[id]
+                        val st = strokes[(sg shr 32).toInt()]
+                        val j = (sg and 0xffffffffL).toInt()
+                        val sp = st.pts
+                        val x0 = sp[2 * j]; val y0 = sp[2 * j + 1]
+                        val x1 = if (sp.size > 2) sp[2 * j + 2] else x0; val y1 = if (sp.size > 2) sp[2 * j + 3] else y0
+                        val dx = x1 - x0; val dy = y1 - y0
+                        val l2 = dx * dx + dy * dy
+                        val t = if (l2 > 0f) (((x - x0) * dx + (y - y0) * dy) / l2).coerceIn(0f, 1f) else 0f
+                        val qx = x0 + dx * t; val qy = y0 + dy * t
+                        val dd = hypot(x - qx, y - qy)
+                        if (dd <= st.width / 2f + 1.5f * res && dd < bd) { bd = dd; bx = qx; by = qy }
+                    }
+                    if (bd < Float.MAX_VALUE) { p[i] = bx; p[i + 1] = by }
+                }
+                i += 2
+            }
+        }
     }
 
     /**

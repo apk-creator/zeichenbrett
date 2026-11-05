@@ -229,7 +229,7 @@ class MainActivity : Activity(), CanvasView.Host {
 
     // Einheitliche Dialogbreiten: Standard / mehrstufige Abläufe / schmale Eingaben
     private val W_STD get() = dpi(460f)
-    private val W_FLOW get() = dpi(760f)
+    private val W_FLOW get() = dpi(640f)
     private val W_INPUT get() = dpi(420f)
     private val panels = ArrayList<Panel>()
 
@@ -340,19 +340,17 @@ class MainActivity : Activity(), CanvasView.Host {
         return row
     }
 
-    /** Zwei beschriftete Blöcke in einer Zeile: links bündig und rechts bündig. */
-    private fun pairRow(lc: String, lv: View, rc: String, rv: View) = LinearLayout(this).apply {
+    /** Zwei beschriftete Blöcke in einer Zeile; der rechte Block beginnt bei leftW (in allen Zeilen gleich). */
+    private fun pairRow(lc: String, lv: View, rc: String, rv: View, leftW: Int) = LinearLayout(this).apply {
         orientation = LinearLayout.HORIZONTAL
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
             addView(caption(lc)); addView(lv)
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        }, LinearLayout.LayoutParams(leftW, ViewGroup.LayoutParams.WRAP_CONTENT))
         addView(LinearLayout(this@MainActivity).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.END
-            addView(caption(rc).apply { gravity = Gravity.END })
-            addView(rv)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dpi(24f) })
+            addView(caption(rc)); addView(rv)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     private fun numberField(v: Int) = EditText(this).apply {
@@ -494,7 +492,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 T_MEASURE -> d?.unit?.label ?: "m"
                 T_RULER -> fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
                 T_ERASER -> "${tools.eraserPct.roundToInt()} %"
-                else -> if (tools.fillMode[k - T_PEN0]) "${tools.fillPct.roundToInt()} %" else fmtWidth(tools.penWidth[k - T_PEN0])
+                else -> if (tools.fillMode[k - T_PEN0]) "${tools.fillPct[k - T_PEN0].roundToInt()} %" else fmtWidth(tools.penWidth[k - T_PEN0])
             }
         }
         onViewChanged()
@@ -777,7 +775,6 @@ class MainActivity : Activity(), CanvasView.Host {
             widthPx = W_INPUT,
             atTop = true,
         )
-        et.requestFocus()
     }
 
     private fun showDocDropdown() {
@@ -881,26 +878,39 @@ class MainActivity : Activity(), CanvasView.Host {
 
     // ================================================================== Werkzeuge
 
+    private var toolTapK = -1
+    private var toolTapT = 0L
+    private var toolTapRun: Runnable? = null
+
     private fun toolTap(k: Int) {
+        val now = android.os.SystemClock.uptimeMillis()
+        val btn = toolBtns[k]
+        // Doppeltipp: Lineal auf 0° zurückdrehen bzw. Größe auf den Standardwert
+        if (k == toolTapK && now - toolTapT < 300) {
+            toolTapRun?.let { btn.removeCallbacks(it) }
+            toolTapRun = null; toolTapK = -1
+            if (k == T_RULER) rulerReset() else resetSize(k)
+            return
+        }
+        toolTapRun?.let { toolBtns.forEach { b -> b.removeCallbacks(it) } }
+        toolTapRun = null
+        toolTapK = k; toolTapT = now
+        fun later(f: () -> Unit) {
+            val r = Runnable { toolTapRun = null; f() }
+            toolTapRun = r
+            btn.postDelayed(r, 280)
+        }
         if (k == T_RULER) {
             dismissPopup()
-            val now = android.os.SystemClock.uptimeMillis()
-            if (now - rulerLastTap < 300) {
-                rulerLastTap = 0L
-                tools.rulerOn = true
-                tools.rulerAngle = 0f
+            later {
+                tools.rulerOn = !tools.rulerOn
+                if (tools.rulerOn && tools.tool == Tool.MEASURE) {
+                    tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN
+                    canvasView.clearMeasure()
+                }
                 canvasView.invalidate()
                 refreshUi()
-                return
             }
-            rulerLastTap = now
-            tools.rulerOn = !tools.rulerOn
-            if (tools.rulerOn && tools.tool == Tool.MEASURE) {
-                tools.tool = Tool.PEN
-                canvasView.clearMeasure()
-            }
-            canvasView.invalidate()
-            refreshUi()
             return
         }
         val isActive = when (k) {
@@ -908,20 +918,23 @@ class MainActivity : Activity(), CanvasView.Host {
             T_ERASER -> tools.tool == Tool.ERASER
             else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
         }
-        if (isActive && k >= T_PEN0 && k < T_ERASER && touchDismissed == k) return
+        if (isActive && touchDismissed == k) { dismissPopup(); return }
         if (isActive && k >= T_PEN0 && k < T_ERASER) {
             // Aktiver Stift: zwischen Stift und Füllen umschalten
             dismissPopup()
-            val i = k - T_PEN0
-            tools.fillMode[i] = !tools.fillMode[i]
-            tools.tool = if (tools.fillMode[i]) Tool.FILL else Tool.PEN
-            canvasView.clearMeasure()
-            canvasView.invalidate()
-            refreshUi()
+            later {
+                val i = k - T_PEN0
+                tools.fillMode[i] = !tools.fillMode[i]
+                if (tools.pen == i && tools.tool != Tool.MEASURE && tools.tool != Tool.ERASER)
+                    tools.tool = if (tools.fillMode[i]) Tool.FILL else Tool.PEN
+                canvasView.clearMeasure()
+                canvasView.invalidate()
+                refreshUi()
+            }
             return
         }
         if (isActive) {
-            if (popupFor == k || touchDismissed == k) dismissPopup() else showToolPopup(k)
+            if (popupFor == k) dismissPopup() else later { showToolPopup(k) }
             return
         }
         dismissPopup()
@@ -933,6 +946,49 @@ class MainActivity : Activity(), CanvasView.Host {
         if (k != T_MEASURE) canvasView.clearMeasure()
         canvasView.invalidate()
         refreshUi()
+    }
+
+    /** Doppeltipp: Größe des Werkzeugs auf den Standardwert. */
+    private fun resetSize(k: Int) {
+        when {
+            k == T_ERASER -> tools.eraserPct = ToolState.DEF_ERASER_PCT
+            k in T_PEN0 until T_ERASER -> {
+                val i = k - T_PEN0
+                if (tools.fillMode[i]) tools.fillPct[i] = ToolState.DEF_FILL_PCT else tools.penWidth[i] = ToolState.DEF_PEN_WIDTH
+            }
+            else -> return
+        }
+        val reopen = popupFor == k
+        refreshUi()
+        if (reopen) showToolPopup(k)
+    }
+
+    private var rulerAnim: android.animation.ValueAnimator? = null
+
+    /** Lineal einblenden (falls aus) und sanft auf 0° zurückdrehen. */
+    private fun rulerReset() {
+        dismissPopup()
+        if (!tools.rulerOn) {
+            tools.rulerOn = true
+            if (tools.tool == Tool.MEASURE) { tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN; canvasView.clearMeasure() }
+        }
+        rulerAnim?.cancel()
+        // Kürzester Weg (Lineal ist symmetrisch: 180°-periodisch)
+        var a0 = ((tools.rulerAngle % 180f) + 180f) % 180f
+        if (a0 > 90f) a0 -= 180f
+        if (a0 == 0f) { tools.rulerAngle = 0f; canvasView.invalidate(); refreshUi(); return }
+        rulerAnim = android.animation.ValueAnimator.ofFloat(a0, 0f).apply {
+            duration = 250
+            addUpdateListener {
+                tools.rulerAngle = it.animatedValue as Float
+                toolBtns[T_RULER].text = fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
+                canvasView.invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) { tools.rulerAngle = 0f; refreshUi() }
+            })
+            start()
+        }
     }
 
     private fun toolLong(k: Int) {
@@ -981,12 +1037,12 @@ class MainActivity : Activity(), CanvasView.Host {
             } else if (tools.fillMode[k - T_PEN0]) {
                 val idx = k - T_PEN0
                 // Toleranz in % (100 % = 10 pt), Fangpunkte wie beim Radierer; Vorschau in Originalgröße
-                label.text = "${tools.fillPct.roundToInt()} %"
-                slider = SliderView(this, ERASER_ANCHORS, tools.fillPct, { v ->
-                    tools.fillPct = v.roundToInt().toFloat().coerceIn(1f, 100f)
-                    label.text = "${tools.fillPct.roundToInt()} %"
+                label.text = "${tools.fillPct[idx].roundToInt()} %"
+                slider = SliderView(this, ERASER_ANCHORS, tools.fillPct[idx], { v ->
+                    tools.fillPct[idx] = v.roundToInt().toFloat().coerceIn(1f, 100f)
+                    label.text = "${tools.fillPct[idx].roundToInt()} %"
                     toolBtns[k].text = label.text
-                    canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol * canvasView.pxPerPt(), prevX, prevBottom)
+                    canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol(idx) * canvasView.pxPerPt(), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() })
             } else {
                 val idx = k - T_PEN0
@@ -1010,8 +1066,9 @@ class MainActivity : Activity(), CanvasView.Host {
                 // Füllen: Hintergrund ignorieren (aktiv) oder als Grenze berücksichtigen
                 val bg = Btn(this)
                 bg.icon = "nobg"
-                bg.active = !tools.fillBackground
-                bg.onTap = { tools.fillBackground = !tools.fillBackground; bg.active = !tools.fillBackground }
+                val fi = k - T_PEN0
+                bg.active = !tools.fillBackground[fi]
+                bg.onTap = { tools.fillBackground[fi] = !tools.fillBackground[fi]; bg.active = !tools.fillBackground[fi] }
                 box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize))
             }
             if (k == T_ERASER) {
@@ -1034,7 +1091,6 @@ class MainActivity : Activity(), CanvasView.Host {
         showPopup(box, p, k, withCatcher = false)
     }
 
-    private var rulerLastTap = 0L
 
     private fun doUndo(undo: Boolean) {
         val d = active ?: return
@@ -1298,18 +1354,25 @@ class MainActivity : Activity(), CanvasView.Host {
             nameField = nf
             content.add(nf)
         }
-        // Blocksatz: links Format / Maßstab, rechts bündig Ausrichtung / Maßeinheit
+        // Links Format / Maßstab, daneben (linksbündig untereinander) Ausrichtung / Maßeinheit
+        val et = numberField(s.scale)
+        val sRow = scaleRow(et)
+        var fRow: View? = null
         if (kind != Kind.PDF) {
             val names = if (kind == Kind.IMAGE) A_NAMES + "Bildgröße" else A_NAMES
-            content.add(pairRow(
-                "Format", choiceRow(names, s.format) { s.format = it },
-                "Ausrichtung", choiceRow(listOf("Portrait", "Landschaft"), if (s.landscape) 1 else 0) { s.landscape = it == 1 },
-            ))
+            fRow = choiceRow(names, s.format) { s.format = it }
         }
-        val et = numberField(s.scale)
+        val um = View.MeasureSpec.UNSPECIFIED
+        val leftW = listOfNotNull(fRow, sRow).maxOf { it.measure(um, um); it.measuredWidth } + dpi(24f)
+        if (fRow != null) content.add(pairRow(
+            "Format", fRow,
+            "Ausrichtung", choiceRow(listOf("Portrait", "Landschaft"), if (s.landscape) 1 else 0) { s.landscape = it == 1 },
+            leftW,
+        ))
         content.add(pairRow(
-            "Maßstab", scaleRow(et),
+            "Maßstab", sRow,
             "Maßeinheit", choiceRow(MUnit.values().map { it.label }, s.unit.ordinal) { s.unit = MUnit.values()[it] },
+            leftW,
         ))
 
         fun read(): DocSettings {
@@ -1321,13 +1384,13 @@ class MainActivity : Activity(), CanvasView.Host {
         if (back != null) buttons.add("Zurück" to back) else buttons.add("Abbrechen" to { done(null, false) })
         if (multi) buttons.add("Alle Seiten anlegen" to { done(read(), true) })
         buttons.add((if (multi) "Seite anlegen" else "Anlegen") to { done(read(), false) })
-        showPanel(title, content, buttons, widthPx = W_FLOW)
+        showPanel(title, content, buttons, widthPx = if (kind == Kind.IMAGE) dpi(740f) else W_FLOW)
     }
 
     // ================================================================== Neu / Öffnen
 
     private fun newBlank(back: (() -> Unit)? = null) {
-        val defName = "Unbenannt ${untitled + 1}"
+        val defName = "Dokument ${untitled + 1}"
         settingsDialog(Kind.BLANK, "Neues Dokument", null, DocSettings(F_A4, false, 150, 100, MUnit.M, defName), false, back) { s, _ ->
             if (s == null) { if (docs.isEmpty()) showStart(); return@settingsDialog }
             val (wmm, hmm) = A_MM[s.format]
@@ -1685,7 +1748,6 @@ class MainActivity : Activity(), CanvasView.Host {
             "Abbrechen" to {},
             "OK" to { et.text.toString().toIntOrNull()?.let(apply) },
         ), cancelable = true, widthPx = W_INPUT, atTop = true)
-        et.requestFocus()
     }
 
     private fun zoomDialog() {

@@ -54,10 +54,16 @@ class ToolState {
     /** Je Stift: Füllen statt Zeichnen (bleibt beim Werkzeugwechsel erhalten). */
     val fillMode = BooleanArray(5)
     /** Füllen: Toleranz in % (100 % = 10 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
-    var fillPct = 5f
-    /** Füllen: Linien des Hintergrunds (PDF, Importe) als Grenzen berücksichtigen. */
-    var fillBackground = false
-    val fillTol get() = fillPct / 10f
+    val fillPct = FloatArray(5) { DEF_FILL_PCT }
+    /** Füllen (je Stift): Linien des Hintergrunds (PDF, Importe) als Grenzen berücksichtigen. */
+    val fillBackground = BooleanArray(5)
+    fun fillTol(i: Int) = fillPct[i] / 10f
+
+    companion object {
+        const val DEF_PEN_WIDTH = 0.3f
+        const val DEF_FILL_PCT = 5f
+        const val DEF_ERASER_PCT = 10f
+    }
 }
 
 sealed class Item
@@ -165,7 +171,7 @@ fun pathOf(p: FloatArray): Path {
 
 /** Ein Tab = eine Seite = ein Dokument. */
 class PageDoc(val id: String, val workDir: File) {
-    var title = "Unbenannt"
+    var title = "Dokument"
     var sourceUri: Uri? = null
     /** Name der zugehörigen Datei (ohne .pdf); weicht der Titel ab, entfällt „Überschreiben“. */
     var fileTitle: String? = null

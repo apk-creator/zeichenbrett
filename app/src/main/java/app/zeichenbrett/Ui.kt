@@ -534,7 +534,8 @@ class CalibView(ctx: Context, private val ppi: () -> Float) : View(ctx) {
     override fun onDraw(c: Canvas) {
         val pxPerMm = ppi() / 25.4f
         val len = 100f * pxPerMm
-        val x0 = context.dp(24f)   // links fest, nur das rechte Ende bewegt sich
+        // links fest (etwa mittig für 243 ppi), nur das rechte Ende bewegt sich
+        val x0 = max(context.dp(24f), (width - 100f * 243f / 25.4f) / 2f)
         val y = height * 0.35f
         p.color = Pal.BLACK
         p.style = Paint.Style.FILL

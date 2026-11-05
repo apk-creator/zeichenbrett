@@ -125,7 +125,7 @@ object Store {
     fun docFromDir(dir: File): PageDoc {
         val j = JSONObject(File(dir, "state.json").readText())
         val d = PageDoc(dir.name, dir)
-        d.title = j.optString("title", "Unbenannt")
+        d.title = j.optString("title", "Dokument")
         d.sourceUri = j.optString("src").takeIf { it.isNotEmpty() }?.let { Uri.parse(it) }
         d.writable = j.optBoolean("writable")
         d.fromMulti = j.optBoolean("multi")

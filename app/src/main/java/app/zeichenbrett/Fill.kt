@@ -121,7 +121,8 @@ object FillAlgo {
         // 4. Umriss → Polygone
         val loops = trace(filled, w, h)
         if (loops.isEmpty()) return Result(null, "Hier ist keine freie Fläche.")
-        return Result(loops.map { simplify(smooth(it), 0.35f) }.filter { it.size >= 6 }, null)
+        // Vereinfachen erst nach dem Einrasten auf die Linienmitten (CanvasView)
+        return Result(loops.map { smooth(it) }.filter { it.size >= 6 }, null)
     }
 
     /** Quadratische Dilatation mit Radius r (getrennt nach Zeilen und Spalten). */
@@ -226,7 +227,7 @@ object FillAlgo {
     }
 
     /** Douglas-Peucker für geschlossene Polygone. */
-    private fun simplify(p: FloatArray, tol: Float): FloatArray {
+    fun simplify(p: FloatArray, tol: Float): FloatArray {
         val n = p.size / 2
         if (n < 8) return p
         // Startpunkt und am weitesten entfernter Punkt teilen die Schleife in zwei Ketten
