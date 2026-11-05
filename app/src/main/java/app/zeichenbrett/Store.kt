@@ -93,7 +93,25 @@ object Store {
         put("dpi", d.dpi)
         put("bg", d.bgColor)
         put("backup", d.backupDone)
-        put("items", itemsToJson(d.items))
+        // Verlauf: jedes Element nur einmal speichern, Schritte als Indexlisten
+        val pool = java.util.IdentityHashMap<Item, Int>()
+        val list = ArrayList<Item>()
+        fun idx(l: List<Item>): JSONArray {
+            val a = JSONArray()
+            for (it in l) {
+                val i = pool.getOrPut(it) { list.add(it); list.size - 1 }
+                a.put(i)
+            }
+            return a
+        }
+        val cur = idx(d.items)
+        val und = JSONArray().also { a -> d.undoStack.forEach { a.put(idx(it)) } }
+        val red = JSONArray().also { a -> d.redoStack.forEach { a.put(idx(it)) } }
+        put("pool", itemsToJson(list))
+        put("cur", cur)
+        put("undo", und)
+        put("redo", red)
+        put("fileTitle", d.fileTitle ?: "")
     }
 
     fun docFromDir(dir: File): PageDoc {
@@ -110,7 +128,17 @@ object Store {
         d.dpi = j.optInt("dpi", 150)
         d.bgColor = j.optInt("bg", Pal.PAPER)
         d.backupDone = j.optBoolean("backup")
-        d.items = itemsFromJson(j.optJSONArray("items"))
+        val pool = j.optJSONArray("pool")
+        if (pool != null) {
+            val items = itemsFromJson(pool)
+            fun lst(a: JSONArray) = (0 until a.length()).map { items[a.getInt(it)] }
+            d.items = lst(j.getJSONArray("cur"))
+            j.optJSONArray("undo")?.let { a -> for (i in 0 until a.length()) d.undoStack.addLast(lst(a.getJSONArray(i))) }
+            j.optJSONArray("redo")?.let { a -> for (i in 0 until a.length()) d.redoStack.addLast(lst(a.getJSONArray(i))) }
+        } else {
+            d.items = itemsFromJson(j.optJSONArray("items"))
+        }
+        d.fileTitle = j.optString("fileTitle").takeIf { it.isNotEmpty() }
         d.dirty = true
         return d
     }

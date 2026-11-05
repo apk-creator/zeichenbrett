@@ -169,8 +169,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         var tEdge = Float.MAX_VALUE
         if (dx > 0f) tEdge = min(tEdge, (w - cx) / dx) else if (dx < 0f) tEdge = min(tEdge, -cx / dx)
         if (dy > 0f) tEdge = min(tEdge, (h - cy) / dy) else if (dy < 0f) tEdge = min(tEdge, -cy / dy)
-        if (tEdge == Float.MAX_VALUE || 1f / tEdge <= 0.5f) return
-        val k = 0.5f * tEdge - 1f
+        if (tEdge == Float.MAX_VALUE || 1f / tEdge <= 0.1f) return
+        val k = 0.1f * tEdge - 1f
         val sx = d.offX; val sy = d.offY
         val tx = sx + dx * k; val ty = sy + dy * k
         settleAnim?.cancel()
@@ -744,7 +744,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     penUp(d, e, 0)
                 } else if (mode == Mode.FINGER) {
                     if (canceledByPalm(e)) rejectFingers(d)
-                    else { fingersChanged(d, e, 0); tapEnd(d); settle() }
+                    else {
+                        val moved = imgMove1 && imgMoved
+                        fingersChanged(d, e, 0); tapEnd(d)
+                        if (moved) { imgMove1 = false; host.onDocEdited() } else settle()
+                    }
                 }
                 mode = Mode.NONE
             }
@@ -1059,6 +1063,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     // ---- Finger: 1 = verschieben, 2 = zoomen/drehen/verschieben bzw. Lineal
 
     private var fCount = 0
+    private var imgMove1 = false
+    private var imgMoved = false
     private var panning = false
     private val fIds = IntArray(2)
     private var panX = 0f; private var panY = 0f
@@ -1089,13 +1095,30 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
         if (fCount == 2 && ids.size == 2 && ids[0] == fIds[0] && ids[1] == fIds[1]) return
         if (fCount == 2 && imgRotG) { imgRotG = false; host.onDocEdited() }
-        else if (fCount == 2 && !onRulerG) flickRotate(d)
+        else if (fCount == 2 && onRulerG) {
+            tools.rulerAngle = (tools.rulerAngle.roundToInt() % 360).toFloat()
+            host.refreshStatus(); invalidate()
+        } else if (fCount == 2) {
+            flickRotate(d)
+            if (rotating) { d.rot = (d.rot.roundToInt() % 360).toFloat(); viewChanged() }
+        }
         fCount = ids.size
+        if (fCount == 2 && imgMove1) { imgMove1 = false }
         if (fCount == 1) {
             fIds[0] = ids[0]
             val i = e.findPointerIndex(fIds[0])
             if (i >= 0) { panX = e.getX(i); panY = e.getY(i) }
             panning = false
+            // Finger auf dem ausgewählten Import: Element verschieben statt Plan
+            imgMove1 = false
+            val sel = d.selected()
+            if (sel != null && i >= 0) {
+                val p = toDoc(d, panX, panY)
+                if (insideItem(sel, p.x, p.y, 12f * dens / scaleOf(d))) {
+                    imgMove1 = true; imgMoved = false
+                    grabDX = p.x - sel.x; grabDY = p.y - sel.y
+                }
+            }
         } else if (fCount == 2) {
             fIds[0] = ids[0]; fIds[1] = ids[1]
             startTwo(d, e)
@@ -1108,7 +1131,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
      * Schnelle, kurze Drehung (bis ±85°): Plan springt in Drehrichtung auf den nächsten 90°-Schritt.
      */
     private fun flickRotate(d: PageDoc) {
-        if (!rotating || tools.rotLocked) return
+        if (!rotating || tools.rotLocked || d.selected() != null) return
         val dur = SystemClock.uptimeMillis() - g0time
         val total = angleDiff(lastAng2, g0ang0)
         if (dur > 450 || abs(total) > 85f || abs(total) * 1000f / dur.coerceAtLeast(1L) < 120f) return
@@ -1160,6 +1183,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 if (hypot(x - panX, y - panY) < 8f * dens) return
                 panning = true
             }
+            if (imgMove1) {
+                if (!imgMoved) { d.pushUndo(); imgMoved = true }
+                val p = toDoc(d, x, y)
+                updateSel(d) { it.copy(x = p.x - grabDX, y = p.y - grabDY) }
+                d.dirty = true
+                panX = x; panY = y
+                invalidate()
+                return
+            }
             d.offX += x - panX; d.offY += y - panY
             panX = x; panY = y
             viewChanged()
@@ -1188,7 +1220,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (onRulerG) {
                 tools.rulerX = g0rx + cx - g0cx
                 tools.rulerY = g0ry + cy - g0cy
-                tools.rulerAngle = snapIfFast(g0ra + angleDiff(ang, g0ang), 15f).roundToInt().toFloat() % 360f
+                tools.rulerAngle = snapIfFast(g0ra + angleDiff(ang, g0ang), 15f) % 360f
                 host.refreshStatus()
                 invalidate()
                 return
@@ -1198,14 +1230,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 if (abs(z - 1f) <= 0.03f) z = 1f
                 d.zoom = z
             }
-            if (!tools.rotLocked) {
+            // Während eines Imports ist die Drehung der Zeichenfläche gesperrt
+            if (!tools.rotLocked && d.selected() == null) {
                 var delta = angleDiff(ang, g0ang)
                 if (!rotating && abs(delta) > 15f) {
                     rotating = true
                     g0ang += 15f * sign(delta)
                     delta = angleDiff(ang, g0ang)
                 }
-                d.rot = if (rotating) snapIfFast(g0rot + delta, 45f).roundToInt().toFloat() % 360f else g0rot
+                d.rot = if (rotating) snapIfFast(g0rot + delta, 45f) % 360f else g0rot
             }
             place(d, g0px, g0py, cx, cy)
             viewChanged()

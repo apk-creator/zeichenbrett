@@ -41,7 +41,7 @@ enum class Tool { MEASURE, PEN, ERASER }
 class ToolState {
     var tool = Tool.PEN
     var pen = 1
-    val penWidth = floatArrayOf(0.25f, 0.25f, 0.25f, 0.25f, 0.25f)
+    val penWidth = floatArrayOf(0.35f, 0.35f, 0.35f, 0.35f, 0.35f)
     var eraserPct = 10f
     var rulerOn = false
     var rulerPlaced = false
@@ -133,6 +133,8 @@ fun pathOf(p: FloatArray): Path {
 class PageDoc(val id: String, val workDir: File) {
     var title = "Unbenannt"
     var sourceUri: Uri? = null
+    /** Name der zugehörigen Datei (ohne .pdf); weicht der Titel ab, entfällt „Überschreiben“. */
+    var fileTitle: String? = null
     var writable = false
     var fromMulti = false
     var pageW = 595f
@@ -144,8 +146,8 @@ class PageDoc(val id: String, val workDir: File) {
     var backupDone = false
 
     @Volatile var items: List<Item> = emptyList()
-    private val undoStack = ArrayDeque<List<Item>>()
-    private val redoStack = ArrayDeque<List<Item>>()
+    val undoStack = ArrayDeque<List<Item>>()
+    val redoStack = ArrayDeque<List<Item>>()
     var dirty = false
 
     // Ansicht
