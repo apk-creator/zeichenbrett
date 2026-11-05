@@ -1076,14 +1076,16 @@ class MainActivity : Activity(), CanvasView.Host {
             listOf(
                 "Abbrechen" to {},
                 "Ohne Speichern schließen" to { reallyClose(d) },
-                "Speichern & schließen" to { saveDoc(d) { reallyClose(d) } },
+                "Speichern & schließen" to { saveDoc(d, { reallyClose(d) }, back = { closeDoc(d) }) },
             ),
             cancelable = true,
             widthPx = dpi(600f),
         )
     }
 
-    private fun reallyClose(d: PageDoc) {
+    private fun reallyClose(d: PageDoc) = removeDoc(d, showStartIfEmpty = true)
+
+    private fun removeDoc(d: PageDoc, showStartIfEmpty: Boolean) {
         val idx = docs.indexOf(d)
         if (idx < 0) return
         docs.removeAt(idx)
@@ -1095,7 +1097,7 @@ class MainActivity : Activity(), CanvasView.Host {
             } else activate(docs[min(idx, docs.size - 1)])
         } else refreshUi()
         discard(d)
-        if (docs.isEmpty()) showStart()
+        if (docs.isEmpty() && showStartIfEmpty) showStart()
     }
 
     private fun autosaveDoc(d: PageDoc) {
@@ -1121,12 +1123,12 @@ class MainActivity : Activity(), CanvasView.Host {
             onTap = { panel?.let { closePanel(it) }; f() }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpi(52f))
         }
-        content.add(row("Neues Dokument") { newBlank() })
+        content.add(row("Neues Dokument") { newBlank { showStart() } })
         content.add(row("Neues Dokument aus Datei") { pickOpen() })
         val recent = Store.recent(prefs)
         if (recent.isNotEmpty()) {
             content.add(caption("Zuletzt geöffnet"))
-            for (r in recent) content.add(row(r.name) { openFile(r.uri, persist = false, fromRecent = true) })
+            for (r in recent) content.add(row(r.name) { openFile(r.uri, persist = false, fromRecent = true, back = { showStart() }) })
         }
         val cancelable = docs.isNotEmpty()
         val pnl = showPanel("Klemmbrett", content, if (cancelable) listOf("Abbrechen" to {}) else emptyList(), cancelable = cancelable)
@@ -1151,7 +1153,7 @@ class MainActivity : Activity(), CanvasView.Host {
         super.onActivityResult(requestCode, resultCode, data)
         val uri = if (resultCode == RESULT_OK) data?.data else null
         when (requestCode) {
-            REQ_OPEN -> if (uri != null) openFile(uri, persist = true) else if (docs.isEmpty()) showStart()
+            REQ_OPEN -> if (uri != null) openFile(uri, persist = true, back = { showStart() }) else if (docs.isEmpty()) showStart()
             REQ_IMPORT -> { val d = importTarget; importTarget = null; if (uri != null && d != null) importInto(d, uri) }
             REQ_SAVE_AS -> {
                 val ps = pendingSave
@@ -1176,7 +1178,7 @@ class MainActivity : Activity(), CanvasView.Host {
     private enum class Kind { BLANK, PDF, IMAGE }
     private class DocSettings(var format: Int, var landscape: Boolean, var dpi: Int, var scale: Int, var unit: MUnit, var name: String = "")
 
-    private fun settingsDialog(kind: Kind, title: String, info: String?, init: DocSettings, multi: Boolean, done: (DocSettings?, Boolean) -> Unit) {
+    private fun settingsDialog(kind: Kind, title: String, info: String?, init: DocSettings, multi: Boolean, back: (() -> Unit)? = null, done: (DocSettings?, Boolean) -> Unit) {
         val s = init
         val content = ArrayList<View>()
         if (info != null) content.add(bodyText(info))
@@ -1214,7 +1216,7 @@ class MainActivity : Activity(), CanvasView.Host {
             return s
         }
         val buttons = ArrayList<Pair<String, () -> Unit>>()
-        buttons.add("Abbrechen" to { done(null, false) })
+        if (back != null) buttons.add("Zurück" to back) else buttons.add("Abbrechen" to { done(null, false) })
         if (multi) buttons.add("Alle Seiten anlegen" to { done(read(), true) })
         buttons.add((if (multi) "Seite anlegen" else "Anlegen") to { done(read(), false) })
         showPanel(title, content, buttons, widthPx = dpi(560f))
@@ -1222,9 +1224,9 @@ class MainActivity : Activity(), CanvasView.Host {
 
     // ================================================================== Neu / Öffnen
 
-    private fun newBlank() {
+    private fun newBlank(back: (() -> Unit)? = null) {
         val defName = "Unbenannt ${untitled + 1}"
-        settingsDialog(Kind.BLANK, "Neues Dokument", null, DocSettings(F_A4, false, 150, 100, MUnit.M, defName), false) { s, _ ->
+        settingsDialog(Kind.BLANK, "Neues Dokument", null, DocSettings(F_A4, false, 150, 100, MUnit.M, defName), false, back) { s, _ ->
             if (s == null) { if (docs.isEmpty()) showStart(); return@settingsDialog }
             val (wmm, hmm) = A_MM[s.format]
             val w = (if (s.landscape) hmm else wmm) * PT_PER_MM
@@ -1239,7 +1241,7 @@ class MainActivity : Activity(), CanvasView.Host {
         }
     }
 
-    private fun openFile(uri: Uri, persist: Boolean, fromRecent: Boolean = false) {
+    private fun openFile(uri: Uri, persist: Boolean, fromRecent: Boolean = false, back: (() -> Unit)? = null) {
         if (docs.size >= MAX_DOCS) { toast("Maximal $MAX_DOCS Dokumente geöffnet."); return }
         if (persist) takePermission(uri)
         showBusy()
@@ -1264,14 +1266,14 @@ class MainActivity : Activity(), CanvasView.Host {
                     ui.post {
                         hideBusy()
                         if (persist) Store.addRecent(prefs, uri, base)
-                        askPdfPage(PdfOpen(uri, base, tmp, pd, n, zbs, sizes, writable), 0)
+                        askPdfPage(PdfOpen(uri, base, tmp, pd, n, zbs, sizes, writable).also { it.back = back }, 0)
                     }
                 } else if (mime == "image/jpeg" || mime == "image/png") {
                     val isJpeg = mime == "image/jpeg"
                     val (pw, ph) = Img.bounds(tmp, isJpeg)
                     val dpi = Img.readDpi(tmp, isJpeg)
                     val base = name.substringBeforeLast('.')
-                    ui.post { hideBusy(); askImage(base, tmp, isJpeg, pw, ph, dpi) }
+                    ui.post { hideBusy(); askImage(base, tmp, isJpeg, pw, ph, dpi, back) }
                 } else {
                     tmp.delete()
                     ui.post { hideBusy(); toast("Dateityp wird nicht unterstützt."); if (docs.isEmpty()) showStart() }
@@ -1289,7 +1291,11 @@ class MainActivity : Activity(), CanvasView.Host {
     private class PdfOpen(
         val uri: Uri, val name: String, val tmp: File, val pd: PDDocument, val n: Int,
         val zbs: List<ZbInfo?>, val sizes: List<Pair<Float, Float>>, val writable: Boolean,
-    ) { var created = 0 }
+    ) {
+        var created = 0
+        var back: (() -> Unit)? = null
+        val pageDocs = HashMap<Int, PageDoc>()
+    }
 
     private fun mmText(p: Pair<Float, Float>) =
         "${(p.first / PT_PER_MM).roundToInt()} × ${(p.second / PT_PER_MM).roundToInt()} mm"
@@ -1303,7 +1309,12 @@ class MainActivity : Activity(), CanvasView.Host {
         val zb = ctx.zbs[i]
         val init = DocSettings(F_A4, false, zb?.dpi ?: 150, zb?.scale ?: 100, zb?.unit ?: MUnit.M)
         val info = (if (ctx.n > 1) "Seite ${i + 1} von ${ctx.n} · " else "") + "Format aus PDF: " + mmText(ctx.sizes[i])
-        settingsDialog(Kind.PDF, ctx.name, info, init, ctx.n > 1) { s, all ->
+        val back: (() -> Unit)? = when {
+            i > 0 -> { { undoPdfPage(ctx, i - 1); askPdfPage(ctx, i - 1) } }
+            ctx.back != null -> { { closePdfOpen(ctx); ctx.back?.invoke() } }
+            else -> null
+        }
+        settingsDialog(Kind.PDF, ctx.name, info, init, ctx.n > 1, back) { s, all ->
             if (s == null) { finishPdfOpen(ctx); return@settingsDialog }
             if (all) {
                 for (k in i until ctx.n) {
@@ -1333,7 +1344,20 @@ class MainActivity : Activity(), CanvasView.Host {
             d.fromMulti = ctx.n > 1
             d.writable = ctx.writable && ctx.n == 1
             setupDoc(d, computeBg = true)
-        }) { addDoc(d) }
+        }) { addDoc(d); ctx.pageDocs[k] = d }
+    }
+
+    private fun undoPdfPage(ctx: PdfOpen, k: Int) {
+        val d = ctx.pageDocs.remove(k) ?: return
+        ctx.created = (ctx.created - 1).coerceAtLeast(0)
+        if (docs.contains(d)) removeDoc(d, showStartIfEmpty = false)
+    }
+
+    private fun closePdfOpen(ctx: PdfOpen) {
+        worker.execute {
+            try { ctx.pd.close() } catch (_: Exception) {}
+            ctx.tmp.delete()
+        }
     }
 
     private fun finishPdfOpen(ctx: PdfOpen) {
@@ -1344,10 +1368,10 @@ class MainActivity : Activity(), CanvasView.Host {
         }
     }
 
-    private fun askImage(name: String, tmp: File, isJpeg: Boolean, pw: Int, ph: Int, fileDpi: Int?) {
+    private fun askImage(name: String, tmp: File, isJpeg: Boolean, pw: Int, ph: Int, fileDpi: Int?, back: (() -> Unit)? = null) {
         val dpi = fileDpi ?: 150
         val info = "Bild: $pw × $ph Pixel · " + (if (fileDpi != null) "$fileDpi DPI" else "keine DPI-Angabe, 150 DPI angenommen")
-        settingsDialog(Kind.IMAGE, name, info, DocSettings(F_IMAGE, pw > ph, dpi, 100, MUnit.M), false) { s, _ ->
+        settingsDialog(Kind.IMAGE, name, info, DocSettings(F_IMAGE, pw > ph, dpi, 100, MUnit.M), false, back?.let { b -> { tmp.delete(); b() } }) { s, _ ->
             if (s == null) { tmp.delete(); if (docs.isEmpty()) showStart(); return@settingsDialog }
             val d = newDoc(name)
             d.scale = s.scale; d.unit = s.unit; d.dpi = dpi
@@ -1429,18 +1453,18 @@ class MainActivity : Activity(), CanvasView.Host {
 
     // ================================================================== Speichern
 
-    private fun saveDoc(d: PageDoc, after: (() -> Unit)?) {
+    private fun saveDoc(d: PageDoc, after: (() -> Unit)?, back: (() -> Unit)? = null) {
         if (d.selectedImage != null) {
             if (active === d) fixSelection() else d.selectedImage = null
         }
         val canOverwrite = d.sourceUri != null && d.writable && !d.fromMulti
         fun go(asNew: Boolean) {
             if (d.items.any { it is ImageItem }) {
-                dpiDialog(d.dpi) { dpi -> d.dpi = dpi; saveDoc2(d, dpi, after, asNew) }
+                dpiDialog(d.dpi, { saveDoc(d, after, back) }) { dpi -> d.dpi = dpi; saveDoc2(d, dpi, after, asNew) }
             } else saveDoc2(d, d.dpi, after, asNew)
         }
         val buttons = ArrayList<Pair<String, () -> Unit>>()
-        buttons.add("Abbrechen" to {})
+        if (back != null) buttons.add("Zurück" to back) else buttons.add("Abbrechen" to {})
         if (canOverwrite) buttons.add("Überschreiben" to { go(false) })
         buttons.add("Speichern unter" to { go(true) })
         showPanel(
@@ -1453,7 +1477,7 @@ class MainActivity : Activity(), CanvasView.Host {
         )
     }
 
-    private fun dpiDialog(current: Int, done: (Int) -> Unit) {
+    private fun dpiDialog(current: Int, back: () -> Unit, done: (Int) -> Unit) {
         var sel = DPIS.indexOf(current).coerceAtLeast(0)
         showPanel(
             "Bildauflösung",
@@ -1461,7 +1485,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 bodyText("Eingebettete Bilder werden beim Speichern höchstens mit dieser Auflösung abgelegt."),
                 choiceRow(DPIS.map { "$it DPI" }, sel) { sel = it },
             ),
-            listOf("Abbrechen" to {}, "Speichern" to { done(DPIS[sel]) }),
+            listOf("Zurück" to back, "Speichern" to { done(DPIS[sel]) }),
             cancelable = true,
         )
     }
