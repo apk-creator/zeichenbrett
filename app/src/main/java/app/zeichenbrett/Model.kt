@@ -53,8 +53,9 @@ class ToolState {
     var eraseBackground = false
     /** Je Stift: Füllen statt Zeichnen (bleibt beim Werkzeugwechsel erhalten). */
     val fillMode = BooleanArray(5)
-    /** Füllen: Öffnungen bis zu dieser Breite (pt) gelten als geschlossen. */
-    var fillTol = 0.5f
+    /** Füllen: Toleranz in % (100 % = 10 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
+    var fillPct = 5f
+    val fillTol get() = fillPct / 10f
 }
 
 sealed class Item

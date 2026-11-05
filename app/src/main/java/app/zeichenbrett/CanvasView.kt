@@ -443,22 +443,25 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
 
         gapPreview?.let { (color, gap) ->
+            // Ring mit waagrechtem Ausschnitt nach rechts; Ausschnitthöhe = Toleranz
             val sw = 3f * dens
             val r = max(22f * dens, gap * 0.8f + sw)
             val cx = previewX + r + sw; val cy = previewBottom
-            // Öffnung als Abstand zwischen den Strichenden (Sehne am Innenrand)
-            val half = Math.toDegrees(kotlin.math.asin(((gap / 2f + 0f) / (r - sw / 2f)).coerceIn(0f, 1f).toDouble())).toFloat()
-            strokeP.color = color; strokeP.strokeWidth = sw
-            val cap = strokeP.strokeCap
-            strokeP.strokeCap = Paint.Cap.BUTT
-            val ov = RectF(cx - r, cy - r, cx + r, cy + r)
-            c.drawArc(ov, half, 360f - 2f * half, false, strokeP)
+            val ring = Path().apply {
+                fillType = Path.FillType.EVEN_ODD
+                addCircle(cx, cy, r + sw / 2f, Path.Direction.CW)
+                addCircle(cx, cy, r - sw / 2f, Path.Direction.CW)
+            }
+            if (gap > 0f) {
+                val cut = Path().apply { addRect(cx, cy - gap / 2f, cx + r + sw, cy + gap / 2f, Path.Direction.CW) }
+                ring.op(cut, Path.Op.DIFFERENCE)
+            }
+            fillP.color = color
+            c.drawPath(ring, fillP)
             if (Color.red(color) > 200 && Color.green(color) > 200) {
                 strokeP.color = Pal.GREY; strokeP.strokeWidth = 1f
-                c.drawArc(RectF(cx - r - sw / 2f, cy - r - sw / 2f, cx + r + sw / 2f, cy + r + sw / 2f), half, 360f - 2f * half, false, strokeP)
-                c.drawArc(RectF(cx - r + sw / 2f, cy - r + sw / 2f, cx + r - sw / 2f, cy + r - sw / 2f), half, 360f - 2f * half, false, strokeP)
+                c.drawPath(ring, strokeP)
             }
-            strokeP.strokeCap = cap
         }
 
         if (tools.rulerOn) drawRuler(c, d)
@@ -906,15 +909,19 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     }
 
     private fun computeFill(items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float): FillAlgo.Result {
-        // Ausschnitte mit 0,25 pt je Pixel; zuletzt die ganze Seite (ggf. gröber)
+        // Auflösung: 0,25 pt je Pixel, bei großer Toleranz gröber (Toleranz ≈ 8 px).
+        // Ausschnitte wachsen, zuletzt die ganze Seite (ggf. gröber).
+        val base = max(0.25f, tol / 8f)
         val tries = ArrayList<Pair<Float, Float>>()   // (pt je px, Seitenlänge in pt)
         for (size in intArrayOf(1024, 2048, 3072)) {
-            tries.add(0.25f to size * 0.25f)
-            if (size * 0.25f >= pw && size * 0.25f >= ph) break
+            tries.add(base to size * base)
+            if (size * base >= pw && size * base >= ph) break
         }
         if (tries.last().second < pw || tries.last().second < ph) {
-            tries.add(max(0.25f, sqrt(pw * ph / 12_000_000f)) to max(pw, ph))
+            tries.add(max(base, sqrt(pw * ph / 12_000_000f)) to max(pw, ph))
         }
+        // Dünne Striche zuerst, dickere darüber: an Kreuzungen gilt die größere Breite
+        val strokes = items.filterIsInstance<Stroke>().sortedBy { it.width }
         var last: FillAlgo.Result? = null
         for ((res, sizePt) in tries) {
             val ppt = 1f / res
@@ -926,11 +933,16 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val cv = Canvas(bmp)
             cv.scale(ppt, ppt); cv.translate(-left, -top)
             val win = RectF(left, top, left + wPt, top + hPt)
-            val sp = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; color = Color.BLACK }
-            val fp = Paint().apply { style = Paint.Style.FILL; color = Color.BLACK }
-            for (it in items) {
-                if (it !is Stroke || !visible(it.bounds, it.width, win)) continue
+            val src = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
+            val sp = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; xfermode = src }
+            val fp = Paint().apply { style = Paint.Style.FILL; xfermode = src }
+            for (it in strokes) {
+                if (!visible(it.bounds, it.width, win)) continue
                 val sw = max(it.width, res)
+                // Wert je Linienpixel: 1 + Anzahl Pixel, die die Füllung bis zur Linienmitte darunter reichen darf
+                val wpx = (sw * ppt).roundToInt().coerceAtLeast(1)
+                val v = (1 + (wpx + 1) / 2).coerceAtMost(255)
+                sp.color = Color.argb(v, 0, 0, 0); fp.color = sp.color
                 if (it.pts.size == 2) cv.drawCircle(it.pts[0], it.pts[1], sw / 2f, fp)
                 else { sp.strokeWidth = sw; cv.drawPath(it.path, sp) }
             }
@@ -939,14 +951,14 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             bmp.copyPixelsToBuffer(buf)
             bmp.recycle()
             val raw = buf.array()
-            val line = BooleanArray(w * h)
-            for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) line[o + x] = raw[r + x].toInt() != 0 }
+            val under = ByteArray(w * h)
+            for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) under[o + x] = raw[r + x] }
             val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
             val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
             // Lücken kleiner als die Toleranz schließen: Linien um je tol/2 verdicken
             val rad = ceil(tol / 2f * ppt - 0.01f).toInt().coerceAtLeast(0)
             val eps = 0.01f
-            val r = FillAlgo.compute(line, w, h, sx, sy, rad,
+            val r = FillAlgo.compute(under, w, h, sx, sy, rad,
                 left > eps, top > eps, left + wPt < pw - eps, top + hPt < ph - eps)
             if (r.polys != null) {
                 val polys = r.polys.map { p -> FloatArray(p.size) { i -> if (i % 2 == 0) left + p[i] * res else top + p[i] * res } }

@@ -20,12 +20,16 @@ object FillAlgo {
 
     class Result(val polys: List<FloatArray>?, val error: String?)
 
-    /** line: Linienpixel des Ausschnitts (w×h), r: Verdickung in px. */
+    /**
+     * under: je Pixel 0 = frei, sonst 1 + Anzahl Pixel, die die Füllung unter diese Linie reichen darf (bis zur Mitte).
+     * r: Verdickung der Linien in px (Toleranz).
+     */
     fun compute(
-        line: BooleanArray, w: Int, h: Int, sx: Int, sy: Int, r: Int,
+        under: ByteArray, w: Int, h: Int, sx: Int, sy: Int, r: Int,
         openL: Boolean, openT: Boolean, openR: Boolean, openB: Boolean,
     ): Result {
         val n = w * h
+        val line = BooleanArray(n) { under[it].toInt() != 0 }
         if (sx !in 0 until w || sy !in 0 until h) return Result(null, "Außerhalb der Zeichenfläche.")
         val closed = if (r > 0) dilate(line, w, h, r) else line
         if (closed[sy * w + sx]) return Result(null, "Hier ist keine freie Fläche.")
@@ -63,17 +67,59 @@ object FillAlgo {
         }
         if (leak) return Result(null, LEAK)
 
-        // 3. Bis an die Linien wachsen lassen, dann 2 px unter die Linien
-        var grown = if (r > 0) dilate(region, w, h, r) else region
+        // 3a. Bis an die Linien wachsen lassen (ergibt in Öffnungen die halbe Toleranz)
+        val grown = if (r > 0) dilate(region, w, h, r) else region.copyOf()
         for (i in 0 until n) if (line[i]) grown[i] = false
-        for (k in 0 until 2) {
-            val g2 = dilate(grown, w, h, 1)
-            for (i in 0 until n) g2[i] = g2[i] && (grown[i] || line[i])
-            grown = g2
+        // 3b. Spitze Winkel: freie Reste, die vollständig im verdickten Linienband liegen und an die Fläche grenzen,
+        //     gehören dazu (z. B. die Spitze eines spitzen Winkels). Reste mit Verbindung nach außen nicht.
+        if (r > 0) {
+            val seen = BooleanArray(n)
+            var st = IntArray(4096)
+            var comp = IntArray(4096)
+            for (s0 in 0 until n) {
+                if (seen[s0] || line[s0] || grown[s0]) continue
+                var sp2 = 0; var cn = 0
+                var thin = true; var touches = false
+                st[sp2++] = s0; seen[s0] = true
+                while (sp2 > 0) {
+                    val p = st[--sp2]
+                    if (cn == comp.size) comp = comp.copyOf(cn * 2)
+                    comp[cn++] = p
+                    if (!closed[p]) thin = false
+                    val x = p % w; val y = p / w
+                    if ((x == 0 && openL) || (x == w - 1 && openR) || (y == 0 && openT) || (y == h - 1 && openB)) thin = false
+                    for (k in 0 until 4) {
+                        val q = when (k) { 0 -> if (x > 0) p - 1 else -1; 1 -> if (x < w - 1) p + 1 else -1; 2 -> if (y > 0) p - w else -1; else -> if (y < h - 1) p + w else -1 }
+                        if (q < 0) continue
+                        if (grown[q]) { touches = true; continue }
+                        if (line[q] || seen[q]) continue
+                        seen[q] = true
+                        if (sp2 == st.size) st = st.copyOf(sp2 * 2)
+                        st[sp2++] = q
+                    }
+                }
+                if (thin && touches) for (i in 0 until cn) grown[comp[i]] = true
+            }
         }
+        // 3c. Unter die Linien bis zu ihrer Mitte (die Linien liegen darüber und decken die Kante ab)
+        var maxU = 0
+        for (i in 0 until n) { val u = under[i].toInt() and 0xFF; if (u > maxU) maxU = u }
+        var cur = grown
+        for (k in 1 until maxU) {
+            val g2 = dilate(cur, w, h, 1)
+            var any = false
+            for (i in 0 until n) {
+                if (g2[i] && !cur[i]) {
+                    if (line[i] && (under[i].toInt() and 0xFF) - 1 >= k) any = true else g2[i] = false
+                }
+            }
+            cur = g2
+            if (!any) break
+        }
+        val filled = cur
 
         // 4. Umriss → Polygone
-        val loops = trace(grown, w, h)
+        val loops = trace(filled, w, h)
         if (loops.isEmpty()) return Result(null, "Hier ist keine freie Fläche.")
         return Result(loops.map { simplify(smooth(it), 0.35f) }.filter { it.size >= 6 }, null)
     }
@@ -118,7 +164,7 @@ object FillAlgo {
             }
             cur = nx
         }
-        val lim = 0.6f
+        val lim = 0.5f
         for (i in 0 until n) {
             val dx = cur[2 * i] - p[2 * i]; val dy = cur[2 * i + 1] - p[2 * i + 1]
             val d = hypot(dx, dy)

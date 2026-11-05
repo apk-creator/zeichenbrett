@@ -56,7 +56,6 @@ class MainActivity : Activity(), CanvasView.Host {
         private const val F_IMAGE = 7
         private val DPIS = intArrayOf(75, 150, 300)
         private val PEN_ANCHORS = floatArrayOf(0.1f, 0.3f, 0.5f, 1f, 2.5f, 5f, 10f)
-        private val FILL_ANCHORS = floatArrayOf(0f, 0.1f, 0.3f, 0.5f, 1f, 2.5f, 5f, 10f)
         private val ERASER_ANCHORS = floatArrayOf(1f, 10f, 25f, 50f, 100f)
 
         // Werkzeugpalette
@@ -230,7 +229,7 @@ class MainActivity : Activity(), CanvasView.Host {
 
     // Einheitliche Dialogbreiten: Standard / mehrstufige Abläufe / schmale Eingaben
     private val W_STD get() = dpi(460f)
-    private val W_FLOW get() = dpi(600f)
+    private val W_FLOW get() = dpi(760f)
     private val W_INPUT get() = dpi(420f)
     private val panels = ArrayList<Panel>()
 
@@ -336,9 +335,24 @@ class MainActivity : Activity(), CanvasView.Host {
                 onSel(i)
             }
             btns.add(b)
-            row.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(46f)).apply { marginEnd = dpi(4f) })
+            row.addView(b, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpi(46f)).apply { if (i > 0) marginStart = dpi(4f) })
         }
         return row
+    }
+
+    /** Zwei beschriftete Blöcke in einer Zeile: links bündig und rechts bündig. */
+    private fun pairRow(lc: String, lv: View, rc: String, rv: View) = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(caption(lc)); addView(lv)
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        addView(LinearLayout(this@MainActivity).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+            addView(caption(rc).apply { gravity = Gravity.END })
+            addView(rv)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginStart = dpi(24f) })
     }
 
     private fun numberField(v: Int) = EditText(this).apply {
@@ -460,8 +474,6 @@ class MainActivity : Activity(), CanvasView.Host {
 
     private fun fmtWidth(v: Float) = if (v < 1f) String.format(Locale.US, "%.2f", v) else String.format(Locale.US, "%.1f", v)
 
-    private fun fmtTol(v: Float) = if (v == 0f) "0" else fmtWidth(v)
-
     private fun fmtDeg(a: Float): String {
         val m = ((a % 360f) + 360f) % 360f
         return "${m.roundToInt() % 360}°"
@@ -482,7 +494,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 T_MEASURE -> d?.unit?.label ?: "m"
                 T_RULER -> fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
                 T_ERASER -> "${tools.eraserPct.roundToInt()} %"
-                else -> if (tools.fillMode[k - T_PEN0]) fmtTol(tools.fillTol) else fmtWidth(tools.penWidth[k - T_PEN0])
+                else -> if (tools.fillMode[k - T_PEN0]) "${tools.fillPct.roundToInt()} %" else fmtWidth(tools.penWidth[k - T_PEN0])
             }
         }
         onViewChanged()
@@ -968,14 +980,14 @@ class MainActivity : Activity(), CanvasView.Host {
                 }, { canvasView.hideSizePreview() })
             } else if (tools.fillMode[k - T_PEN0]) {
                 val idx = k - T_PEN0
-                label.text = fmtTol(tools.fillTol) + " pt"
-                // Vorschau: Kreis mit der überbrückten Öffnung, in Originalgröße (100 %)
-                slider = SliderView(this, FILL_ANCHORS, tools.fillTol, { v ->
-                    tools.fillTol = v
-                    label.text = fmtTol(tools.fillTol) + " pt"
-                    refreshUi()
+                // Toleranz in % (100 % = 10 pt), Fangpunkte wie beim Radierer; Vorschau in Originalgröße
+                label.text = "${tools.fillPct.roundToInt()} %"
+                slider = SliderView(this, ERASER_ANCHORS, tools.fillPct, { v ->
+                    tools.fillPct = v.roundToInt().toFloat().coerceIn(1f, 100f)
+                    label.text = "${tools.fillPct.roundToInt()} %"
+                    toolBtns[k].text = label.text
                     canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol * canvasView.pxPerPt(), prevX, prevBottom)
-                }, { canvasView.hideSizePreview() }, discrete = true)
+                }, { canvasView.hideSizePreview() })
             } else {
                 val idx = k - T_PEN0
                 label.text = fmtWidth(tools.penWidth[idx]) + " pt"
@@ -989,7 +1001,7 @@ class MainActivity : Activity(), CanvasView.Host {
             // Gleiche Abstände zwischen den Fangpunkten wie bei den Stiften (45 dp je Abschnitt)
             val segs = (when {
                 k == T_ERASER -> ERASER_ANCHORS.size
-                tools.fillMode[k - T_PEN0] -> FILL_ANCHORS.size
+                tools.fillMode[k - T_PEN0] -> ERASER_ANCHORS.size
                 else -> PEN_ANCHORS.size
             }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
@@ -1278,18 +1290,19 @@ class MainActivity : Activity(), CanvasView.Host {
             nameField = nf
             content.add(nf)
         }
+        // Blocksatz: links Format / Maßstab, rechts bündig Ausrichtung / Maßeinheit
         if (kind != Kind.PDF) {
-            content.add(caption("Format"))
             val names = if (kind == Kind.IMAGE) A_NAMES + "Bildgröße" else A_NAMES
-            content.add(choiceRow(names, s.format) { s.format = it })
-            content.add(caption("Ausrichtung"))
-            content.add(choiceRow(listOf("Portrait", "Landschaft"), if (s.landscape) 1 else 0) { s.landscape = it == 1 })
+            content.add(pairRow(
+                "Format", choiceRow(names, s.format) { s.format = it },
+                "Ausrichtung", choiceRow(listOf("Portrait", "Landschaft"), if (s.landscape) 1 else 0) { s.landscape = it == 1 },
+            ))
         }
-        content.add(caption("Maßstab"))
         val et = numberField(s.scale)
-        content.add(scaleRow(et))
-        content.add(caption("Maßeinheit"))
-        content.add(choiceRow(MUnit.values().map { it.label }, s.unit.ordinal) { s.unit = MUnit.values()[it] })
+        content.add(pairRow(
+            "Maßstab", scaleRow(et),
+            "Maßeinheit", choiceRow(MUnit.values().map { it.label }, s.unit.ordinal) { s.unit = MUnit.values()[it] },
+        ))
 
         fun read(): DocSettings {
             s.scale = (et.text.toString().toIntOrNull() ?: s.scale).coerceIn(1, 100000)
