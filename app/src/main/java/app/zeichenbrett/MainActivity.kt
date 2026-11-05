@@ -1384,7 +1384,7 @@ class MainActivity : Activity(), CanvasView.Host {
         if (back != null) buttons.add("Zurück" to back) else buttons.add("Abbrechen" to { done(null, false) })
         if (multi) buttons.add("Alle Seiten anlegen" to { done(read(), true) })
         buttons.add((if (multi) "Seite anlegen" else "Anlegen") to { done(read(), false) })
-        showPanel(title, content, buttons, widthPx = if (kind == Kind.IMAGE) dpi(740f) else W_FLOW)
+        showPanel(title, content, buttons, widthPx = when (kind) { Kind.IMAGE -> dpi(740f); Kind.PDF -> dpi(if (multi) 540f else 460f); else -> W_FLOW })
     }
 
     // ================================================================== Neu / Öffnen
