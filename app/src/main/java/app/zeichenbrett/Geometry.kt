@@ -109,7 +109,7 @@ object Geo {
         if (!hit.op(src, cap, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
         val outP = android.graphics.Path()
         if (!outP.op(src, cap, android.graphics.Path.Op.DIFFERENCE)) return null
-        return Fill(f.color, polysOf(outP))
+        return Fill(f.color, polysOf(outP), f.under)
     }
 
     /** Konturen eines Pfads als Polygone (Kurven angenähert). */

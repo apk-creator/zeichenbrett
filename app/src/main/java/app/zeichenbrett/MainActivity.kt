@@ -490,7 +490,7 @@ class MainActivity : Activity(), CanvasView.Host {
             if (k >= T_PEN0 && k < T_ERASER) b.icon = if (tools.fillMode[k - T_PEN0]) "bucket" else "pen"
             b.text = when (k) {
                 T_MEASURE -> d?.unit?.label ?: "m"
-                T_RULER -> fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
+                T_RULER -> fmtDeg(tools.rulerAngle)
                 T_ERASER -> "${tools.eraserPct.roundToInt()} %"
                 else -> if (tools.fillMode[k - T_PEN0]) "${tools.fillPct[k - T_PEN0].roundToInt()} %" else fmtWidth(tools.penWidth[k - T_PEN0])
             }
@@ -978,15 +978,15 @@ class MainActivity : Activity(), CanvasView.Host {
             if (tools.tool == Tool.MEASURE) { tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN; canvasView.clearMeasure() }
         }
         rulerAnim?.cancel()
-        // Kürzester Weg (Lineal ist symmetrisch: 180°-periodisch)
-        var a0 = ((tools.rulerAngle % 180f) + 180f) % 180f
-        if (a0 > 90f) a0 -= 180f
+        // Bis 180° zurück (minus) auf 0°, ab 181° vorwärts (plus) auf 360° = 0°
+        val a0 = ((tools.rulerAngle % 360f) + 360f) % 360f
+        val target = if (a0 <= 180f) 0f else 360f
         if (a0 == 0f) { tools.rulerAngle = 0f; canvasView.invalidate(); refreshUi(); return }
-        rulerAnim = android.animation.ValueAnimator.ofFloat(a0, 0f).apply {
+        rulerAnim = android.animation.ValueAnimator.ofFloat(a0, target).apply {
             duration = 250
             addUpdateListener {
                 tools.rulerAngle = it.animatedValue as Float
-                toolBtns[T_RULER].text = fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
+                toolBtns[T_RULER].text = fmtDeg(tools.rulerAngle)
                 canvasView.invalidate()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
@@ -1174,7 +1174,7 @@ class MainActivity : Activity(), CanvasView.Host {
     }
 
     override fun refreshStatus() {
-        if (toolBtns.size > T_RULER) toolBtns[T_RULER].text = fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
+        if (toolBtns.size > T_RULER) toolBtns[T_RULER].text = fmtDeg(tools.rulerAngle)
     }
 
     override fun onUndoGesture() {

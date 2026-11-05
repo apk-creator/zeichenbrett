@@ -18,7 +18,7 @@ object FillAlgo {
 
     const val LEAK = "leak"
 
-    class Result(val polys: List<FloatArray>?, val error: String?)
+    class Result(val polys: List<FloatArray>?, val error: String?, val under: Boolean = false)
 
     /**
      * under: je Pixel 0 = frei, sonst 1 + Anzahl Pixel, die die Füllung unter diese Linie reichen darf (bis zur Mitte).

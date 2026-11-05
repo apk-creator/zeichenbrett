@@ -36,7 +36,7 @@ object Store {
                     o.put("t", "c"); o.put("c", it.color); o.put("w", it.width.toDouble()); o.put("p", ptsToString(it.pts))
                 }
                 is Fill -> {
-                    o.put("t", "f"); o.put("c", it.color)
+                    o.put("t", "f"); o.put("c", it.color); if (it.under) o.put("u", true)
                     o.put("p", JSONArray().also { a -> it.polys.forEach { a.put(ptsToString(it)) } })
                 }
                 is ImageItem -> {
@@ -62,7 +62,7 @@ object Store {
                 "c" -> out.add(Cover(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
                 "f" -> {
                     val pa = o.getJSONArray("p")
-                    out.add(Fill(o.getInt("c"), (0 until pa.length()).map { ptsFromString(pa.getString(it)) }))
+                    out.add(Fill(o.getInt("c"), (0 until pa.length()).map { ptsFromString(pa.getString(it)) }, o.optBoolean("u")))
                 }
                 "i" -> {
                     var x = o.getDouble("x").toFloat(); var y = o.getDouble("y").toFloat()

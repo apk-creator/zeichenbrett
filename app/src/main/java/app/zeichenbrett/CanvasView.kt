@@ -69,7 +69,6 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val mulP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; blendMode = android.graphics.BlendMode.MULTIPLY }
     private val bmpP = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val textP = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; color = Pal.BLACK }
     private val tmpPath = Path()
@@ -363,15 +362,27 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         fillP.color = d.bgColor
         c.drawRect(page, fillP)
         c.clipRect(page)
-        d.overview?.let { if (!it.isRecycled) c.drawBitmap(it, null, page, bmpP) }
+        // Füllungen unter dem Hintergrund
+        for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
         val hr = hires
-        if (hr != null && hrDoc === d && !hr.isRecycled) {
+        val hrOk = hr != null && hrDoc === d && !hr.isRecycled
+        d.overview?.let {
+            if (!it.isRecycled) {
+                c.save()
+                if (hrOk) {
+                    // Vorschau nur außerhalb des scharfen Ausschnitts (sonst scheint sie durch)
+                    val hp = Path().apply { addRect(0f, 0f, hr!!.width.toFloat(), hr.height.toFloat(), Path.Direction.CW) }
+                    hp.transform(hrInv)
+                    c.clipOutPath(hp)
+                }
+                c.drawBitmap(it, null, page, bmpP)
+                c.restore()
+            }
+        }
+        if (hrOk) {
             c.save()
             c.concat(hrInv)
-            // Die Vorschau darunter abdecken, sonst scheint sie an transparenten Stellen durch
-            fillP.color = d.bgColor
-            c.drawRect(0f, 0f, hr.width.toFloat(), hr.height.toFloat(), fillP)
-            c.drawBitmap(hr, 0f, 0f, bmpP)
+            c.drawBitmap(hr!!, 0f, 0f, bmpP)
             c.restore()
         }
         // Alle Elemente in ihrer tatsächlichen Reihenfolge
@@ -388,10 +399,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
                 is Stroke -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
-                is Fill -> if (visible(it.bounds, 0f, vis)) {
-                    val fp = if (it.multiply) mulP else fillP
-                    fp.color = it.color; c.drawPath(it.path, fp)
-                }
+                is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -895,9 +903,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val color = Pal.PENS[tools.pen]
         val tol = tools.fillTol(tools.pen)
         val withBg = tools.fillBackground[tools.pen]
-        val mul = Fill(color, emptyList()).multiply
         Thread {
-            val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg, mul) } catch (e: Throwable) {
+            val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg) } catch (e: Throwable) {
                 FillAlgo.Result(null, "Füllen nicht möglich.")
             }
             post {
@@ -905,7 +912,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 val polys = res.polys
                 if (polys.isNullOrEmpty()) { host.onMessage(res.error ?: "Hier ist keine freie Fläche."); return@post }
                 if (doc !== d) return@post
-                val f = Fill(color, polys)
+                val f = Fill(color, polys, res.under)
                 // Unter die angrenzenden Striche legen (die Linien decken die Füllkante ab), aber nicht unter Importe
                 val cur = d.items
                 val lastImg = cur.indexOfLast { it is ImageItem }
@@ -923,7 +930,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }.start()
     }
 
-    private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean, mul: Boolean): FillAlgo.Result {
+    private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean): FillAlgo.Result {
         // Auflösung: 0,25 pt je Pixel, bei großer Toleranz gröber (Toleranz ≈ 8 px).
         // Ausschnitte wachsen, zuletzt die ganze Seite (ggf. gröber).
         // Feineres Raster bei kleiner Toleranz, damit auch schmale Lücken erkannt werden
@@ -969,7 +976,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val raw = buf.array()
             val under = ByteArray(w * h)
             for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) under[o + x] = raw[r + x] }
-            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top, if (mul) 2 else 1)
+            val sx0 = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
+            val sy0 = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
+            // Unter den Hintergrund nur, wenn dort keine Importe/Abdeckungen liegen
+            val allowUnder = items.none { (it is ImageItem && RectF.intersects(boundsOf(it.corners()), win)) || (it is Cover && RectF.intersects(it.bounds, win)) }
+            val underBg = withBg && backgroundBarriers(d, items, under, w, h, ppt, left, top, allowUnder, sx0, sy0)
             val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
             val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
             // Lücken kleiner als die Toleranz schließen: Linien um je tol/2 verdicken
@@ -980,7 +991,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (r.polys != null) {
                 val polys = r.polys.map { p -> FloatArray(p.size) { i -> if (i % 2 == 0) left + p[i] * res else top + p[i] * res } }
                 snapToStrokes(polys, strokes, res)
-                return FillAlgo.Result(polys.map { FillAlgo.simplify(it, 0.3f * res) }.filter { it.size >= 6 }, null)
+                return FillAlgo.Result(polys.map { FillAlgo.simplify(it, 0.3f * res) }.filter { it.size >= 6 }, null, underBg)
             }
             last = r
             if (r.error != FillAlgo.LEAK) break
@@ -1010,10 +1021,20 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 val x1 = if (n > 1) p[2 * j + 2] else x0; val y1 = if (n > 1) p[2 * j + 3] else y0
                 val id = segs.size
                 segs.add((si.toLong() shl 32) or j.toLong())
-                val cx0 = floor((min(x0, x1) - m) / cell).toInt(); val cx1 = floor((max(x0, x1) + m) / cell).toInt()
-                val cy0 = floor((min(y0, y1) - m) / cell).toInt(); val cy1 = floor((max(y0, y1) + m) / cell).toInt()
-                if ((cx1 - cx0 + 1).toLong() * (cy1 - cy0 + 1) > 4096) continue
-                for (gx in cx0..cx1) for (gy in cy0..cy1) grid.getOrPut(key(gx, gy)) { ArrayList(4) }.add(id)
+                // Zellen entlang des Segments eintragen (auch lange, schräge Linien)
+                val len = hypot(x1 - x0, y1 - y0)
+                val steps = max(1, ceil(len / (cell * 0.5f)).toInt())
+                val nr = ceil(m / cell).toInt()
+                val done = HashSet<Long>()
+                for (k in 0..steps) {
+                    val sx = x0 + (x1 - x0) * k / steps; val sy = y0 + (y1 - y0) * k / steps
+                    if (sx < bb.left - m || sx > bb.right + m || sy < bb.top - m || sy > bb.bottom + m) continue
+                    val gx0 = floor(sx / cell).toInt(); val gy0 = floor(sy / cell).toInt()
+                    for (gx in gx0 - nr..gx0 + nr) for (gy in gy0 - nr..gy0 + nr) {
+                        val kk = key(gx, gy)
+                        if (done.add(kk)) grid.getOrPut(kk) { ArrayList(4) }.add(id)
+                    }
+                }
             }
         }
         if (grid.isEmpty()) return
@@ -1074,11 +1095,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
      * Hintergrund (PDF-Seite, Importe, Abdeckungen) rastern; alles, was sich deutlich von der
      * Zeichenflächenfarbe abhebt, wird zur Grenze. Die Füllung reicht nicht darunter (Wert 1).
      */
-    private fun backgroundBarriers(d: PageDoc, items: List<Item>, under: ByteArray, w: Int, h: Int, ppt: Float, left: Float, top: Float, value: Int) {
+    /** Rückgabe: true = Füllung kann unter den Hintergrund (dort transparent); dann darf sie unter dessen Linien reichen. */
+    private fun backgroundBarriers(d: PageDoc, items: List<Item>, under: ByteArray, w: Int, h: Int, ppt: Float, left: Float, top: Float, allowUnder: Boolean, sx: Int, sy: Int): Boolean {
+        var value = 1
+        var underOk = false
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         try {
             val m = Matrix().apply { setScale(ppt, ppt); postTranslate(-left * ppt, -top * ppt) }
             d.renderer?.submit { d.renderer?.render(bmp, m) }?.get()
+            if (allowUnder && Color.alpha(bmp.getPixel(sx, sy)) < 250) { underOk = true; value = 7 }
             val cv = Canvas(bmp)
             cv.concat(m)
             val pp = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -1119,6 +1144,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         } finally {
             bmp.recycle()
         }
+        return underOk
     }
 
     private fun startDraw(dx: Float, dy: Float, x: Float, y: Float) {

@@ -39,6 +39,7 @@ class PageInfo(val w: Float, val h: Float, val zb: ZbInfo?)
 object PdfIO {
     private val ZB_DATA: COSName = COSName.getPDFName("ZBData")
     private const val MARK = "ZBDraw"
+    private const val UNDER_MARK = "ZBUnder"
 
     fun createBlank(out: File, w: Float, h: Float) {
         PDDocument().use { d ->
@@ -145,6 +146,23 @@ object PdfIO {
                 else -> {}
             }
         }
+        // Füllungen unter dem Hintergrund: erster Inhaltsstrom
+        val ucrc = json.optLong("ucrc", -1L)
+        if (ucrc >= 0) {
+            val contents = dict.getDictionaryObject(COSName.CONTENTS)
+            if (contents is COSArray && contents.size() > 0) {
+                val s = contents.getObject(0) as? COSStream
+                if (s != null) {
+                    val bytes = s.createInputStream().use { it.readBytes() }
+                    val head = String(bytes, 0, min(bytes.size, 64), Charsets.ISO_8859_1).trimStart()
+                    if (head.startsWith("/$UNDER_MARK BMC") && crcOf(bytes) == ucrc) {
+                        contents.remove(0)
+                        val u = try { Store.itemsFromJson(json.optJSONArray("uitems")) } catch (e: Exception) { null }
+                        if (u != null) items = u + (items ?: emptyList())
+                    }
+                }
+            }
+        }
         return ZbInfo(
             json.optInt("scale", 0).takeIf { it > 0 },
             runCatching { MUnit.valueOf(json.optString("unit")) }.getOrNull(),
@@ -180,7 +198,21 @@ object PdfIO {
                 // Elemente in ihrer Reihenfolge schreiben: Bildgruppen unmarkiert, Strichgruppen markiert.
                 // Nur die letzte Strichgruppe (nach dem letzten Bild) bleibt nach dem Wiederöffnen editierbar.
                 val runs = ArrayList<MutableList<Item>>()
+                // Füllungen unter dem Hintergrund: eigener Strom VOR dem Seiteninhalt
+                val unders = data.items.filter { it is Fill && it.under }
+                var ujson: org.json.JSONArray? = null
+                var ucrc = -1L
+                if (unders.isNotEmpty()) {
+                    PDPageContentStream(pd, page, PDPageContentStream.AppendMode.PREPEND, true, false).use { cs ->
+                        cs.beginMarkedContent(COSName.getPDFName(UNDER_MARK))
+                        for (f in unders) fillPolys(cs, (f as Fill).polys, f.color, H)
+                        cs.endMarkedContent()
+                    }
+                    val bytes = firstContent(page)?.createInputStream()?.use { it.readBytes() }
+                    if (bytes != null) { ucrc = crcOf(bytes); ujson = Store.itemsToJson(unders) }
+                }
                 for (it in data.items) {
+                    if (it is Fill && it.under) continue
                     val img = it is ImageItem
                     val lastRun = runs.lastOrNull()
                     if (lastRun != null && (lastRun[0] is ImageItem) == img) lastRun.add(it) else runs.add(mutableListOf(it))
@@ -191,6 +223,8 @@ object PdfIO {
                     .put("unit", data.unit.name)
                     .put("dpi", dpi)
                     .put("crc", -1L)
+                    .put("ucrc", ucrc)
+                if (ujson != null) json.put("uitems", ujson)
                 for ((ri, run) in runs.withIndex()) {
                     PDPageContentStream(pd, page, PDPageContentStream.AppendMode.APPEND, true, false).use { cs ->
                         if (run[0] is ImageItem) {
@@ -228,6 +262,13 @@ object PdfIO {
         }
     }
 
+    private fun firstContent(page: PDPage): COSStream? =
+        when (val c = page.cosObject.getDictionaryObject(COSName.CONTENTS)) {
+            is COSArray -> if (c.size() > 0) c.getObject(0) as? COSStream else null
+            is COSStream -> c
+            else -> null
+        }
+
     private fun lastContent(page: PDPage): COSStream? =
         when (val c = page.cosObject.getDictionaryObject(COSName.CONTENTS)) {
             is COSArray -> if (c.size() > 0) c.getObject(c.size() - 1) as? COSStream else null
@@ -256,13 +297,6 @@ object PdfIO {
 
     private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float) {
         if (polys.isEmpty()) return
-        val mul = !(Color.red(c) > 240 && Color.green(c) > 240 && Color.blue(c) > 240)
-        if (mul) {
-            cs.saveGraphicsState()
-            val gs = com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState()
-            gs.setBlendMode(com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode.MULTIPLY)
-            cs.setGraphicsStateParameters(gs)
-        }
         cs.setNonStrokingColor(color(c))
         for (p in polys) {
             if (p.size < 6) continue
@@ -272,7 +306,6 @@ object PdfIO {
             cs.closePath()
         }
         cs.fill()
-        if (mul) cs.restoreGraphicsState()
     }
 
     private fun drawImageItem(pd: PDDocument, cs: PDPageContentStream, im: ImageItem, H: Float, dpi: Int, keep: MutableList<PDDocument>) {

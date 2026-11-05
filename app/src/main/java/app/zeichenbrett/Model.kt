@@ -82,7 +82,11 @@ class Cover(val color: Int, val width: Float, val pts: FloatArray) : Item() {
 }
 
 /** Füllung einer geschlossenen Fläche: Polygone (gerade-ungerade-Regel), Koordinaten in pt. */
-class Fill(val color: Int, val polys: List<FloatArray>) : Item() {
+/**
+ * under = true: liegt unter der Hintergrund-PDF (deren Linien und Text bleiben darüber sichtbar),
+ * sonst über dem Hintergrund in der normalen Reihenfolge.
+ */
+class Fill(val color: Int, val polys: List<FloatArray>, val under: Boolean = false) : Item() {
     val bounds: RectF = RectF().also { r -> polys.forEachIndexed { i, p -> if (i == 0) r.set(boundsOf(p)) else r.union(boundsOf(p)) } }
     val path: Path by lazy {
         Path().also { path ->
@@ -90,9 +94,6 @@ class Fill(val color: Int, val polys: List<FloatArray>) : Item() {
             for (p in polys) { path.addPath(pathOf(p)); path.close() }
         }
     }
-
-    /** Farbige Füllungen werden multipliziert (Linien darunter bleiben sichtbar); Weiß deckt ab. */
-    val multiply: Boolean get() = !(Color.red(color) > 240 && Color.green(color) > 240 && Color.blue(color) > 240)
 
     /** Liegt (x, y) in der Fläche? */
     fun contains(x: Float, y: Float): Boolean {

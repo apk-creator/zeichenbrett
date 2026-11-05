@@ -411,7 +411,7 @@ object Icons {
                 c.drawRoundRect(8.5f, 2.5f, 15.5f, 6f, 1.2f, 1.2f, p)
                 p.style = Paint.Style.STROKE
                 p.strokeWidth = 1.8f
-                c.drawLine(2.5f, 21.5f, 19.5f, 4.5f, p)
+                c.drawLine(3.5f, 22f, 20.5f, 4f, p)
             }
             "check" -> {
                 path.moveTo(5f, 12.5f); path.lineTo(10f, 17.5f); path.lineTo(19.5f, 7f)
