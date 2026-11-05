@@ -404,6 +404,16 @@ object Icons {
                 path.moveTo(6f, 9f); path.lineTo(12f, 15f); path.lineTo(18f, 9f)
                 c.drawPath(path, p)
             }
+            "ortho" -> {
+                // Rechter Winkel: zwei Schenkel mit Winkelzeichen
+                path.moveTo(5f, 3.5f); path.lineTo(5f, 19f); path.lineTo(20.5f, 19f)
+                c.drawPath(path, p)
+                val q = Path().apply { moveTo(5f, 13f); lineTo(11f, 13f); lineTo(11f, 19f) }
+                p.strokeWidth = 1.2f
+                c.drawPath(q, p)
+                c.drawCircle(8f, 16f, 0.9f, p.apply { style = Paint.Style.FILL })
+                p.style = Paint.Style.STROKE
+            }
             "nobg" -> {
                 // Durchgestrichenes Klemmbrett: Hintergrund ignorieren, nur eigene Striche radieren
                 c.drawRoundRect(5f, 4.5f, 19f, 21.5f, 2f, 2f, p)

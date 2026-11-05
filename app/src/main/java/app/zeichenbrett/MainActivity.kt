@@ -85,6 +85,7 @@ class MainActivity : Activity(), CanvasView.Host {
     private lateinit var bRot: Btn
     private lateinit var bScale: Btn
     private lateinit var bImport: Btn
+    private lateinit var bBg: Btn
     private lateinit var bSave: Btn
     private lateinit var bClose: Btn
 
@@ -291,6 +292,23 @@ class MainActivity : Activity(), CanvasView.Host {
             }
             box.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpi(14f) })
         }
+        // Enter/OK der Tastatur löst die Hauptschaltfläche (rechts) aus
+        buttons.lastOrNull()?.let { (_, action) ->
+            fun hook(v: View) {
+                if (v is EditText) {
+                    v.imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                    v.isSingleLine = true
+                    v.setOnEditorActionListener { _, id, ev ->
+                        val enter = ev != null && ev.keyCode == android.view.KeyEvent.KEYCODE_ENTER && ev.action == android.view.KeyEvent.ACTION_DOWN
+                        if (id == android.view.inputmethod.EditorInfo.IME_ACTION_DONE || enter) {
+                            if (panel.overlay.parent != null) { closePanel(panel); action() }
+                            true
+                        } else false
+                    }
+                } else if (v is ViewGroup) for (i in 0 until v.childCount) hook(v.getChildAt(i))
+            }
+            hook(inner)
+        }
         val rw = if (root.width > 0) root.width else resources.displayMetrics.widthPixels
         overlay.addView(box, FrameLayout.LayoutParams(min(widthPx, rw - dpi(32f)), ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -445,11 +463,15 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         bScale = Btn(this).apply { text = "1:100"; textSp = 16f; onTap = { scaleDialog() } }
         bImport = Btn(this).apply { icon = "import"; onTap = { startImport() } }
+        bBg = Btn(this).apply {
+            icon = "nobg"
+            onTap = { tools.ignoreBackground = !tools.ignoreBackground; refreshUi() }
+        }
         bSave = Btn(this).apply { icon = "save"; onTap = { this@MainActivity.active?.let { saveDoc(it, null) } } }
         bClose = Btn(this).apply { icon = "close"; onTap = { this@MainActivity.active?.let { closeDoc(it) } } }
         val iconW = (btnSize * 1.1f).roundToInt()
         val gapS = dpi(4f)
-        val all = listOf(bUndo, bRedo, bZoom, bRot, bScale, bImport, bSave, bClose)
+        val all = listOf(bUndo, bRedo, bZoom, bRot, bScale, bBg, bImport, bSave, bClose)
         for ((i, b) in all.withIndex()) {
             val w = if (b === bZoom || b === bRot || b === bScale) wide else iconW
             setBar.addView(b, LinearLayout.LayoutParams(w, btnSize).apply { if (i < all.size - 1) marginEnd = gapS })
@@ -497,6 +519,7 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         onViewChanged()
         bScale.text = "1:${d?.scale ?: 100}"
+        bBg.active = tools.ignoreBackground
         bUndo.enabledBtn = d?.canUndo == true
         bRedo.enabledBtn = d?.canRedo == true
         for (b in listOf(bZoom, bRot, bScale, bImport, bSave, bClose)) b.enabledBtn = d != null
@@ -933,10 +956,8 @@ class MainActivity : Activity(), CanvasView.Host {
             }
             return
         }
-        if (isActive) {
-            if (popupFor == k) dismissPopup() else later { showToolPopup(k) }
-            return
-        }
+        // Messen/Radierer: Antippen, wenn aktiv, bewirkt nichts (Einstellungen über Halten)
+        if (isActive) { dismissPopup(); return }
         dismissPopup()
         when (k) {
             T_MEASURE -> { tools.tool = Tool.MEASURE; tools.rulerOn = false }
@@ -997,7 +1018,15 @@ class MainActivity : Activity(), CanvasView.Host {
     }
 
     private fun toolLong(k: Int) {
-        if (k == T_RULER) return
+        if (k == T_RULER) {
+            if (!tools.rulerOn) {
+                tools.rulerOn = true
+                if (tools.tool == Tool.MEASURE) { tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN; canvasView.clearMeasure() }
+                canvasView.invalidate(); refreshUi()
+            }
+            showToolPopup(k)
+            return
+        }
         when (k) {
             T_MEASURE -> { tools.tool = Tool.MEASURE; tools.rulerOn = false }
             T_ERASER -> tools.tool = Tool.ERASER
@@ -1013,7 +1042,14 @@ class MainActivity : Activity(), CanvasView.Host {
         val box = palette(this, true)
         var prevX = 0f
         var prevBottom = 0f
-        if (k == T_MEASURE) {
+        if (k == T_RULER) {
+            // Lineal: orthogonales Zeichnen ein/aus
+            val b = Btn(this)
+            b.icon = "ortho"
+            b.active = tools.rulerOrtho
+            b.onTap = { tools.rulerOrtho = !tools.rulerOrtho; b.active = tools.rulerOrtho }
+            box.addView(b, LinearLayout.LayoutParams(btnSize, btnSize))
+        } else if (k == T_MEASURE) {
             val d = active ?: return
             for (u in MUnit.values()) {
                 val b = Btn(this)
@@ -1066,22 +1102,6 @@ class MainActivity : Activity(), CanvasView.Host {
                 else -> PEN_ANCHORS.size
             }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
-            if (k != T_ERASER && tools.fillMode[k - T_PEN0]) {
-                // Füllen: Hintergrund ignorieren (aktiv) oder als Grenze berücksichtigen
-                val bg = Btn(this)
-                bg.icon = "nobg"
-                val fi = k - T_PEN0
-                bg.active = !tools.fillBackground[fi]
-                bg.onTap = { tools.fillBackground[fi] = !tools.fillBackground[fi]; bg.active = !tools.fillBackground[fi] }
-                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize).apply { marginStart = -dpi(8f) })
-            }
-            if (k == T_ERASER) {
-                val bg = Btn(this)
-                bg.icon = "nobg"
-                bg.active = !tools.eraseBackground
-                bg.onTap = { tools.eraseBackground = !tools.eraseBackground; bg.active = !tools.eraseBackground }
-                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize).apply { marginStart = -dpi(8f) })
-            }
         }
         val btn = toolBtns[k]
         val p = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {

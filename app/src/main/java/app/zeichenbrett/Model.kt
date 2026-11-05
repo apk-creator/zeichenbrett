@@ -50,13 +50,14 @@ class ToolState {
     var rulerAngle = 0f
     var zoomLocked = false
     var rotLocked = false
-    var eraseBackground = false
+    /** Hintergrund (PDF, Importe) ignorieren: Radierer und Füllen wirken nur auf eigene Elemente. */
+    var ignoreBackground = true
+    /** Lineal: auch rechtwinklig zum Lineal zeichnen. */
+    var rulerOrtho = false
     /** Je Stift: Füllen statt Zeichnen (bleibt beim Werkzeugwechsel erhalten). */
     val fillMode = BooleanArray(5)
     /** Füllen: Toleranz in % (0 % = keine, 100 % = 0,5 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
     val fillPct = FloatArray(5) { DEF_FILL_PCT }
-    /** Füllen (je Stift): Linien des Hintergrunds (PDF, Importe) als Grenzen berücksichtigen. */
-    val fillBackground = BooleanArray(5)
     /** 0 % = keine Toleranz, 1–100 % = 0,1–0,5 pt (feiner lässt sich nicht sinnvoll unterscheiden). */
     fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0f else 0.1f + 0.4f * fillPct[i] / 100f
 

@@ -403,7 +403,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
-        if (act == PenAct.ERASE && cur.n >= 2 && tools.eraseBackground && eraseCover) drawCurrent(c, d.bgColor, eraseWidthPt, minW)
+        if (act == PenAct.ERASE && cur.n >= 2 && !tools.ignoreBackground && eraseCover) drawCurrent(c, d.bgColor, eraseWidthPt, minW)
         c.restore()
 
         // Auswahl (Bild)
@@ -585,10 +585,13 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         return String.format(Locale.US, "%.3f", v).trimEnd('0').trimEnd('.')
     }
 
+    /** Zeichnen im Linealbereich: Lineal blass, Strich wird durchgezeichnet. */
+    private var rulerFaded = false
+
     private fun drawRuler(c: Canvas, d: PageDoc) {
         val L = (width + height) * 2f
         val H = rulerH
-        c.save()
+        if (rulerFaded) c.saveLayerAlpha(null, 77) else c.save()
         c.translate(tools.rulerX, tools.rulerY)
         c.rotate(tools.rulerAngle)
         fillP.color = Color.argb(215, 250, 250, 250)
@@ -902,7 +905,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val items = d.items
         val color = Pal.PENS[tools.pen]
         val tol = tools.fillTol(tools.pen)
-        val withBg = tools.fillBackground[tools.pen]
+        val withBg = !tools.ignoreBackground
         Thread {
             val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg) } catch (e: Throwable) {
                 FillAlgo.Result(null, "Füllen nicht möglich.")
@@ -1154,6 +1157,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         curColor = Pal.PENS[tools.pen]
         curWidth = tools.penWidth[tools.pen]
         straight = false
+        rulerFaded = tools.rulerOn && onRuler(x, y)
         holdSX = x; holdSY = y
         removeCallbacks(holdRun)
         if (!tools.rulerOn) postDelayed(holdRun, 333)
@@ -1161,7 +1165,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     private fun startErase(d: PageDoc, dx: Float, dy: Float, x: Float, y: Float) {
         act = PenAct.ERASE
-        eraseCover = tools.eraseBackground
+        eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
@@ -1243,11 +1247,18 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
     }
 
-    /** Parallelführung: Lineal liegt im Bildschirmraum, die Richtung im Dokument ist um die Planrotation verschoben. */
+    /**
+     * Parallelführung: Lineal liegt im Bildschirmraum, die Richtung im Dokument ist um die Planrotation verschoben.
+     * Orthogonal: parallel oder rechtwinklig zum Lineal, je nachdem, wohin der Stift näher zeigt.
+     */
     private fun rulerLine(d: PageDoc, dx: Float, dy: Float) {
         val a = Math.toRadians((tools.rulerAngle - d.rot).toDouble())
-        val ux = cos(a).toFloat(); val uy = sin(a).toFloat()
-        val t = (dx - sx0) * ux + (dy - sy0) * uy
+        var ux = cos(a).toFloat(); var uy = sin(a).toFloat()
+        var t = (dx - sx0) * ux + (dy - sy0) * uy
+        if (tools.rulerOrtho) {
+            val tn = (dx - sx0) * -uy + (dy - sy0) * ux
+            if (abs(tn) > abs(t)) { val ox = ux; ux = -uy; uy = ox; t = tn }
+        }
         cur.clear()
         cur.add(sx0, sy0)
         cur.add(sx0 + ux * t, sy0 + uy * t)
@@ -1267,6 +1278,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     private fun finishAction(d: PageDoc) {
         removeCallbacks(holdRun)
+        rulerFaded = false
         when (act) {
             PenAct.DRAW -> {
                 var pts = cur.toArray()
