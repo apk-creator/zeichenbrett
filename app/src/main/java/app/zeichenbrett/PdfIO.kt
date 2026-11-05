@@ -203,6 +203,7 @@ object PdfIO {
                                 when (it) {
                                     is Stroke -> polyline(cs, it.pts, it.width, it.color, H)
                                     is Cover -> polyline(cs, it.pts, it.width, it.color, H)
+                                    is Fill -> fillPolys(cs, it.polys, it.color, H)
                                     else -> {}
                                 }
                             }
@@ -251,6 +252,19 @@ object PdfIO {
             while (i + 1 < p.size) { cs.lineTo(p[i], H - p[i + 1]); i += 2 }
         }
         cs.stroke()
+    }
+
+    private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float) {
+        if (polys.isEmpty()) return
+        cs.setNonStrokingColor(color(c))
+        for (p in polys) {
+            if (p.size < 6) continue
+            cs.moveTo(p[0], H - p[1])
+            var i = 2
+            while (i + 1 < p.size) { cs.lineTo(p[i], H - p[i + 1]); i += 2 }
+            cs.closePath()
+        }
+        cs.fillEvenOdd()
     }
 
     private fun drawImageItem(pd: PDDocument, cs: PDPageContentStream, im: ImageItem, H: Float, dpi: Int, keep: MutableList<PDDocument>) {

@@ -14,7 +14,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:screenOrientation="fullUser"
-            android:windowSoftInputMode="adjustPan">
+            android:windowSoftInputMode="adjustNothing">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

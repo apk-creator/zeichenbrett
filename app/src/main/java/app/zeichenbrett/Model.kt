@@ -35,13 +35,13 @@ enum class MUnit(val label: String, val mm: Double) {
     M("m", 1000.0), CM("cm", 10.0), MM("mm", 1.0)
 }
 
-enum class Tool { MEASURE, PEN, ERASER }
+enum class Tool { MEASURE, PEN, FILL, ERASER }
 
 /** Werkzeugzustand, gilt für alle Dokumente. */
 class ToolState {
     var tool = Tool.PEN
     var pen = 1
-    val penWidth = floatArrayOf(0.35f, 0.35f, 0.35f, 0.35f, 0.35f)
+    val penWidth = floatArrayOf(0.3f, 0.3f, 0.3f, 0.3f, 0.3f)
     var eraserPct = 10f
     var rulerOn = false
     var rulerPlaced = false
@@ -50,7 +50,7 @@ class ToolState {
     var rulerAngle = 0f
     var zoomLocked = false
     var rotLocked = false
-    var eraseBackground = true
+    var eraseBackground = false
 }
 
 sealed class Item
@@ -65,6 +65,33 @@ class Stroke(val color: Int, val width: Float, val pts: FloatArray) : Item() {
 class Cover(val color: Int, val width: Float, val pts: FloatArray) : Item() {
     val bounds: RectF = boundsOf(pts)
     val path: Path by lazy { pathOf(pts) }
+}
+
+/** Füllung einer geschlossenen Fläche: Polygone (gerade-ungerade-Regel), Koordinaten in pt. */
+class Fill(val color: Int, val polys: List<FloatArray>) : Item() {
+    val bounds: RectF = RectF().also { r -> polys.forEachIndexed { i, p -> if (i == 0) r.set(boundsOf(p)) else r.union(boundsOf(p)) } }
+    val path: Path by lazy {
+        Path().also { path ->
+            path.fillType = Path.FillType.EVEN_ODD
+            for (p in polys) { path.addPath(pathOf(p)); path.close() }
+        }
+    }
+
+    /** Liegt (x, y) in der Fläche? */
+    fun contains(x: Float, y: Float): Boolean {
+        if (!bounds.contains(x, y)) return false
+        var inside = false
+        for (p in polys) {
+            val n = p.size / 2
+            var j = n - 1
+            for (i in 0 until n) {
+                val xi = p[2 * i]; val yi = p[2 * i + 1]; val xj = p[2 * j]; val yj = p[2 * j + 1]
+                if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside
+                j = i
+            }
+        }
+        return inside
+    }
 }
 
 /**

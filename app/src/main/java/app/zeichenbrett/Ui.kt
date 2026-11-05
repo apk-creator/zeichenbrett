@@ -14,6 +14,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.widget.LinearLayout
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.pow
@@ -336,6 +337,26 @@ object Icons {
                 c.drawPath(path, p)
                 c.drawLine(5.2f, 15.2f, 8.8f, 18.8f, p)
             }
+            "bucket" -> {
+                // Gekippter Eimer, unten mit Farbe gefüllt, daneben ein Tropfen
+                path.moveTo(2.5f, 11f); path.lineTo(10f, 3.5f); path.lineTo(17.5f, 11f); path.lineTo(10f, 18.5f); path.close()
+                val paint = Path().apply { moveTo(2.5f, 11f); lineTo(17.5f, 11f); lineTo(10f, 18.5f); close() }
+                val drop = Path().apply {
+                    moveTo(19.8f, 13f)
+                    cubicTo(21.8f, 16f, 22.2f, 17f, 22.2f, 18f)
+                    cubicTo(22.2f, 19.4f, 21.1f, 20.5f, 19.8f, 20.5f)
+                    cubicTo(18.5f, 20.5f, 17.4f, 19.4f, 17.4f, 18f)
+                    cubicTo(17.4f, 17f, 17.8f, 16f, 19.8f, 13f); close()
+                }
+                p.style = Paint.Style.FILL; p.color = fill ?: fg
+                c.drawPath(paint, p); c.drawPath(drop, p)
+                p.style = Paint.Style.STROKE; p.color = fg
+                c.drawPath(path, p)
+                c.drawPath(drop, p)
+                c.drawLine(2.5f, 11f, 17.5f, 11f, p)
+                // Henkel
+                c.drawLine(6.2f, 7.2f, 3.5f, 4.5f, p)
+            }
             "eraser" -> {
                 path.moveTo(3f, 14f); path.lineTo(11f, 6f); path.lineTo(19f, 14f); path.lineTo(13f, 20f); path.lineTo(9f, 20f); path.close()
                 c.drawPath(path, p)
@@ -445,6 +466,8 @@ class SliderView(
     var value: Float,
     private val onChange: (Float) -> Unit,
     private val onRelease: () -> Unit = {},
+    /** Nur die Fangpunkte selbst sind wählbar. */
+    private val discrete: Boolean = false,
 ) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pad = ctx.dp(14f)
@@ -490,6 +513,8 @@ class SliderView(
         var v = valAt(t)
         val tol = context.dp(10f)
         for (i in 0..segs) if (abs(i.toFloat() / segs * w - t * w) <= tol) { v = anchors[i]; break }
+        if (discrete) v = anchors[(t * segs).roundToInt().coerceIn(0, segs)]
+        if (discrete && v == value && e.actionMasked == MotionEvent.ACTION_MOVE) return true
         value = v
         onChange(v)
         invalidate()

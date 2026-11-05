@@ -54,7 +54,7 @@ class MainActivity : Activity(), CanvasView.Host {
         private const val F_A4 = 2
         private const val F_IMAGE = 7
         private val DPIS = intArrayOf(75, 150, 300)
-        private val PEN_ANCHORS = floatArrayOf(0.10f, 0.18f, 0.25f, 0.35f, 0.50f, 1f, 2.5f, 5f, 10f)
+        private val PEN_ANCHORS = floatArrayOf(0.1f, 0.3f, 0.5f, 1f, 2.5f, 5f, 10f)
         private val ERASER_ANCHORS = floatArrayOf(1f, 10f, 25f, 50f, 100f)
 
         // Werkzeugpalette
@@ -292,12 +292,14 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         val rw = if (root.width > 0) root.width else resources.displayMetrics.widthPixels
         overlay.addView(box, FrameLayout.LayoutParams(min(widthPx, rw - dpi(32f)), ViewGroup.LayoutParams.WRAP_CONTENT,
-            if (atTop) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.CENTER).apply {
-            if (atTop) topMargin = (rh * 0.1f).roundToInt()
+            Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            // Alle Dialoge mit gleicher Oberkante; die Bildschirmtastatur verschiebt nichts
+            topMargin = (rh * 0.1f).roundToInt()
         })
         box.post {
-            val maxH = rh - dpi(48f)
-            if (box.height > maxH) box.layoutParams = FrameLayout.LayoutParams(box.width, maxH, Gravity.CENTER)
+            val top = (rh * 0.1f).roundToInt()
+            val maxH = rh - top - dpi(24f)
+            if (box.height > maxH) box.layoutParams = FrameLayout.LayoutParams(box.width, maxH, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = top }
         }
         overlay.setOnClickListener { if (cancelable) { closePanel(panel); onCancel?.invoke() } }
         root.addView(overlay, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -416,12 +418,12 @@ class MainActivity : Activity(), CanvasView.Host {
         bRedo = Btn(this).apply { icon = "redo"; onTap = { doUndo(false) } }
         bZoom = Btn(this).apply {
             text = "100 %"; textSp = 16f; badgeSpace = true
-            onTap = { zoomDialog() }
+            onTap = { delayedTap(this, { zoomDialog() }) { if (!tools.zoomLocked) { canvasView.zoom100Centered(); refreshUi() } } }
             onLong = { tools.zoomLocked = !tools.zoomLocked; refreshUi() }
         }
         bRot = Btn(this).apply {
             text = "0°"; textSp = 16f; badgeSpace = true
-            onTap = { rotDialog() }
+            onTap = { delayedTap(this, { rotDialog() }) { rotReset() } }
             onLong = { tools.rotLocked = !tools.rotLocked; refreshUi() }
         }
         bScale = Btn(this).apply { text = "1:100"; textSp = 16f; onTap = { scaleDialog() } }
@@ -466,8 +468,9 @@ class MainActivity : Activity(), CanvasView.Host {
                 T_MEASURE -> tools.tool == Tool.MEASURE
                 T_RULER -> tools.rulerOn
                 T_ERASER -> tools.tool == Tool.ERASER
-                else -> tools.tool == Tool.PEN && tools.pen == k - T_PEN0
+                else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
             }
+            if (k >= T_PEN0 && k < T_ERASER) b.icon = if (tools.tool == Tool.FILL && tools.pen == k - T_PEN0) "bucket" else "pen"
             b.text = when (k) {
                 T_MEASURE -> d?.unit?.label ?: "m"
                 T_RULER -> fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
@@ -855,7 +858,16 @@ class MainActivity : Activity(), CanvasView.Host {
         val isActive = when (k) {
             T_MEASURE -> tools.tool == Tool.MEASURE
             T_ERASER -> tools.tool == Tool.ERASER
-            else -> tools.tool == Tool.PEN && tools.pen == k - T_PEN0
+            else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
+        }
+        if (isActive && k >= T_PEN0 && k < T_ERASER) {
+            // Aktiver Stift: zwischen Stift und Füllen umschalten
+            dismissPopup()
+            tools.tool = if (tools.tool == Tool.FILL) Tool.PEN else Tool.FILL
+            canvasView.clearMeasure()
+            canvasView.invalidate()
+            refreshUi()
+            return
         }
         if (isActive) {
             if (popupFor == k) dismissPopup() else showToolPopup(k)
@@ -877,7 +889,7 @@ class MainActivity : Activity(), CanvasView.Host {
         when (k) {
             T_MEASURE -> { tools.tool = Tool.MEASURE; tools.rulerOn = false }
             T_ERASER -> tools.tool = Tool.ERASER
-            else -> { tools.tool = Tool.PEN; tools.pen = k - T_PEN0 }
+            else -> { if (!(tools.tool == Tool.FILL && tools.pen == k - T_PEN0)) tools.tool = Tool.PEN; tools.pen = k - T_PEN0 }
         }
         if (k != T_MEASURE) canvasView.clearMeasure()
         canvasView.invalidate()
@@ -919,11 +931,11 @@ class MainActivity : Activity(), CanvasView.Host {
                 val idx = k - T_PEN0
                 label.text = fmtWidth(tools.penWidth[idx]) + " pt"
                 slider = SliderView(this, PEN_ANCHORS, tools.penWidth[idx], { v ->
-                    tools.penWidth[idx] = (v * 100f).roundToInt() / 100f
+                    tools.penWidth[idx] = v
                     label.text = fmtWidth(tools.penWidth[idx]) + " pt"
                     toolBtns[k].text = fmtWidth(tools.penWidth[idx])
                     canvasView.showSizePreview(Pal.PENS[idx], canvasView.penPx(tools.penWidth[idx]), prevX, prevBottom)
-                }, { canvasView.hideSizePreview() })
+                }, { canvasView.hideSizePreview() }, discrete = true)
             }
             // Gleiche Abstände zwischen den Fangpunkten wie bei den Stiften (45 dp je Abschnitt)
             val segs = (if (k == T_ERASER) ERASER_ANCHORS.size else PEN_ANCHORS.size) - 1
@@ -1611,6 +1623,42 @@ class MainActivity : Activity(), CanvasView.Host {
         }
     }
 
+    private var pendingTap: Runnable? = null
+    private var pendingTapBtn: View? = null
+
+    /** Einfacher Tipp erst nach kurzer Wartezeit, falls kein zweiter Tipp folgt; Doppeltipp sofort. */
+    private fun delayedTap(b: View, single: () -> Unit, double: () -> Unit) {
+        val p = pendingTap
+        if (p != null && pendingTapBtn === b) {
+            b.removeCallbacks(p)
+            pendingTap = null; pendingTapBtn = null
+            double()
+            return
+        }
+        p?.let { pendingTapBtn?.removeCallbacks(it) }
+        val r = Runnable { pendingTap = null; pendingTapBtn = null; single() }
+        pendingTap = r; pendingTapBtn = b
+        b.postDelayed(r, 280)
+    }
+
+    /** Doppeltipp auf Rotation: Import bzw. Plan auf 0°. */
+    private fun rotReset() {
+        val d = active ?: return
+        val sel = d.selected()
+        if (sel != null) {
+            if (sel.angle == 0f) return
+            d.pushUndo()
+            d.items = d.items.map { if (it is ImageItem && it.id == sel.id) it.copy(angle = 0f) else it }
+            d.dirty = true
+            canvasView.invalidate()
+            refreshUi()
+        } else if (!tools.rotLocked) {
+            canvasView.setPlanRotation(0f)
+            canvasView.settle()
+            refreshUi()
+        }
+    }
+
     private fun rotDialog() {
         val d = active ?: return
         val sel = d.selected()
@@ -1737,6 +1785,8 @@ class MainActivity : Activity(), CanvasView.Host {
     private fun errorDialog(title: String, e: Throwable, then: (() -> Unit)?) {
         showPanel(title, listOf(bodyText(e.message ?: e.javaClass.simpleName)), listOf("OK" to { then?.invoke() }))
     }
+
+    override fun onMessage(text: String) = toast(text)
 
     private fun toast(t: String) = Toast.makeText(this, t, Toast.LENGTH_SHORT).show()
 }

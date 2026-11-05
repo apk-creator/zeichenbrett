@@ -35,6 +35,10 @@ object Store {
                 is Cover -> {
                     o.put("t", "c"); o.put("c", it.color); o.put("w", it.width.toDouble()); o.put("p", ptsToString(it.pts))
                 }
+                is Fill -> {
+                    o.put("t", "f"); o.put("c", it.color)
+                    o.put("p", JSONArray().also { a -> it.polys.forEach { a.put(ptsToString(it)) } })
+                }
                 is ImageItem -> {
                     o.put("t", "i"); o.put("id", it.id); o.put("pdf", it.isPdf); o.put("jpg", it.isJpeg)
                     o.put("f", it.file); o.put("sw", it.srcW.toDouble()); o.put("sh", it.srcH.toDouble())
@@ -56,6 +60,10 @@ object Store {
             when (o.optString("t")) {
                 "s" -> out.add(Stroke(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
                 "c" -> out.add(Cover(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
+                "f" -> {
+                    val pa = o.getJSONArray("p")
+                    out.add(Fill(o.getInt("c"), (0 until pa.length()).map { ptsFromString(pa.getString(it)) }))
+                }
                 "i" -> {
                     var x = o.getDouble("x").toFloat(); var y = o.getDouble("y").toFloat()
                     var w = o.getDouble("w").toFloat(); var h = o.getDouble("h").toFloat()

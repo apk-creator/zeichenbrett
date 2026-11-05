@@ -74,6 +74,11 @@ object Geo {
         var changed = false
         val out = ArrayList<Item>(items.size + 4)
         for (it in items) {
+            if (it is Fill) {
+                // Füllungen werden als Ganzes entfernt, wenn der Radierer sie berührt
+                if (it.contains(bx, by) || it.contains(ax, ay)) changed = true else out.add(it)
+                continue
+            }
             if (it !is Stroke) { out.add(it); continue }
             val hw = it.width / 2f
             val bb = it.bounds

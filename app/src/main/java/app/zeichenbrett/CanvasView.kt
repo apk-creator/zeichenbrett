@@ -42,6 +42,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         fun refreshStatus()
         fun onUndoGesture()
         fun onPenDown()
+        fun onMessage(text: String)
     }
 
     var doc: PageDoc? = null
@@ -376,6 +377,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
                 is Stroke -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
+                is Fill -> if (visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -832,9 +834,82 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 measureA = PointF(dx, dy); measureB = PointF(dx, dy)
                 updateMeasure(d)
             }
+            tools.tool == Tool.FILL -> fillAt(d, dx, dy)
             else -> startDraw(dx, dy, x, y)
         }
         invalidate()
+    }
+
+    // ---- Füllen
+
+    @Volatile private var filling = false
+
+    /** Füllt die geschlossene Fläche um (px, py). Berücksichtigt nur eigene Striche. */
+    private fun fillAt(d: PageDoc, px: Float, py: Float) {
+        if (filling) return
+        if (px < 0f || py < 0f || px > d.pageW || py > d.pageH) return
+        filling = true
+        val items = d.items
+        val color = Pal.PENS[tools.pen]
+        Thread {
+            val res = try { computeFill(items, d.pageW, d.pageH, px, py) } catch (e: Throwable) {
+                FillAlgo.Result(null, "Füllen nicht möglich.")
+            }
+            post {
+                filling = false
+                val polys = res.polys
+                if (polys.isNullOrEmpty()) { host.onMessage(res.error ?: "Hier ist keine freie Fläche."); return@post }
+                if (doc !== d) return@post
+                d.pushUndo()
+                d.items = d.items + Fill(color, polys)
+                d.dirty = true
+                host.onDocEdited()
+                invalidate()
+            }
+        }.start()
+    }
+
+    private fun computeFill(items: List<Item>, pw: Float, ph: Float, px: Float, py: Float): FillAlgo.Result {
+        val ppt = 4f                          // 0,25 pt je Pixel → Lücken < 0,5 pt gelten als geschlossen
+        var last: FillAlgo.Result? = null
+        for (size in intArrayOf(1024, 2048, 4096)) {
+            val sizePt = size / ppt
+            val wPt = min(sizePt, pw); val hPt = min(sizePt, ph)
+            val left = (px - wPt / 2f).coerceIn(0f, pw - wPt)
+            val top = (py - hPt / 2f).coerceIn(0f, ph - hPt)
+            val w = ceil(wPt * ppt).toInt().coerceAtLeast(1); val h = ceil(hPt * ppt).toInt().coerceAtLeast(1)
+            val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ALPHA_8)
+            val cv = Canvas(bmp)
+            cv.scale(ppt, ppt); cv.translate(-left, -top)
+            val win = RectF(left, top, left + wPt, top + hPt)
+            val sp = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; color = Color.BLACK }
+            val fp = Paint().apply { style = Paint.Style.FILL; color = Color.BLACK }
+            for (it in items) {
+                if (it !is Stroke || !visible(it.bounds, it.width, win)) continue
+                val sw = max(it.width, 1f / ppt)
+                if (it.pts.size == 2) cv.drawCircle(it.pts[0], it.pts[1], sw / 2f, fp)
+                else { sp.strokeWidth = sw; cv.drawPath(it.path, sp) }
+            }
+            val buf = java.nio.ByteBuffer.allocate(bmp.rowBytes * h)
+            bmp.copyPixelsToBuffer(buf)
+            val rb = bmp.rowBytes
+            bmp.recycle()
+            val raw = buf.array()
+            val line = BooleanArray(w * h)
+            for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) line[o + x] = raw[r + x].toInt() != 0 }
+            val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
+            val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
+            val r = FillAlgo.compute(line, w, h, sx, sy, true, true, true, true)
+            if (r.polys != null) {
+                val polys = r.polys.map { p -> FloatArray(p.size) { i -> if (i % 2 == 0) left + p[i] / ppt else top + p[i] / ppt } }
+                return FillAlgo.Result(polys, null)
+            }
+            last = r
+            // Nur bei „nicht geschlossen“ mit größerem Ausschnitt weitersuchen
+            if (r.error?.startsWith("Die Fläche") != true || (wPt >= pw && hPt >= ph)) break
+        }
+        if (last?.error?.startsWith("Die Fläche") == true) return FillAlgo.Result(null, "Die Fläche ist nicht geschlossen.")
+        return last ?: FillAlgo.Result(null, "Hier ist keine freie Fläche.")
     }
 
     private fun startDraw(dx: Float, dy: Float, x: Float, y: Float) {
