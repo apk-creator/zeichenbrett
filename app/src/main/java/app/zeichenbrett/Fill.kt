@@ -1,6 +1,5 @@
 package app.zeichenbrett
 
-import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
 
@@ -8,23 +7,27 @@ import kotlin.math.max
  * Füllen geschlossener Flächen.
  *
  * Eingabe ist ein gerasterter Ausschnitt der eigenen Striche.
- * 1. Linien um 1 px verdicken → Lücken < 2 px gelten als geschlossen.
- * 2. Freie Fläche ab dem Startpunkt fluten. Berührt sie einen offenen Rand des Ausschnitts, ist sie nicht geschlossen.
- * 3. Fläche um 1 px wachsen lassen (bis an die Linien), Linienpixel selbst bleiben frei.
- * 4. Umriss in geschlossene Polygone umwandeln und vereinfachen (gerade Linien statt Treppen).
+ * 1. Linien um r px verdicken → Lücken bis zur Toleranz gelten als geschlossen.
+ * 2. Freie Fläche ab dem Startpunkt fluten. Berührt sie einen offenen Rand des Ausschnitts
+ *    (= Ausschnitt liegt innerhalb der Seite), muss mit größerem Ausschnitt gesucht werden.
+ *    Ränder an der Seitenkante sind geschlossen: offene Flächen werden bis zum Rand gefüllt.
+ * 3. Fläche bis an die Linien und 2 px darunter wachsen lassen (die Linien liegen darüber).
+ * 4. Umriss in geschlossene Polygone umwandeln, glätten und vereinfachen.
  */
 object FillAlgo {
 
+    const val LEAK = "leak"
+
     class Result(val polys: List<FloatArray>?, val error: String?)
 
-    /** line: Linienpixel des Ausschnitts (w×h). */
+    /** line: Linienpixel des Ausschnitts (w×h), r: Verdickung in px. */
     fun compute(
-        line: BooleanArray, w: Int, h: Int, sx: Int, sy: Int,
+        line: BooleanArray, w: Int, h: Int, sx: Int, sy: Int, r: Int,
         openL: Boolean, openT: Boolean, openR: Boolean, openB: Boolean,
     ): Result {
         val n = w * h
-        val closed = dilate(line, w, h)
         if (sx !in 0 until w || sy !in 0 until h) return Result(null, "Außerhalb der Zeichenfläche.")
+        val closed = if (r > 0) dilate(line, w, h, r) else line
         if (closed[sy * w + sx]) return Result(null, "Hier ist keine freie Fläche.")
 
         // 2. Fluten (4er-Nachbarschaft, Scanline)
@@ -58,31 +61,70 @@ object FillAlgo {
             }
             if (leak) break
         }
-        if (leak) return Result(null, "Die Fläche ist nicht geschlossen oder größer als der Suchbereich.")
+        if (leak) return Result(null, LEAK)
 
-        // 3. Bis an die Linien wachsen lassen
-        val grown = dilate(region, w, h)
+        // 3. Bis an die Linien wachsen lassen, dann 2 px unter die Linien
+        var grown = if (r > 0) dilate(region, w, h, r) else region
         for (i in 0 until n) if (line[i]) grown[i] = false
+        for (k in 0 until 2) {
+            val g2 = dilate(grown, w, h, 1)
+            for (i in 0 until n) g2[i] = g2[i] && (grown[i] || line[i])
+            grown = g2
+        }
 
         // 4. Umriss → Polygone
         val loops = trace(grown, w, h)
         if (loops.isEmpty()) return Result(null, "Hier ist keine freie Fläche.")
-        return Result(loops.map { simplify(it, 0.6f) }.filter { it.size >= 6 }, null)
+        return Result(loops.map { simplify(smooth(it), 0.35f) }.filter { it.size >= 6 }, null)
     }
 
-    /** 3×3-Dilatation. */
-    private fun dilate(m: BooleanArray, w: Int, h: Int): BooleanArray {
-        val out = BooleanArray(m.size)
+    /** Quadratische Dilatation mit Radius r (getrennt nach Zeilen und Spalten). */
+    private fun dilate(m: BooleanArray, w: Int, h: Int, r: Int): BooleanArray {
+        val tmp = BooleanArray(m.size)
         for (y in 0 until h) {
             val row = y * w
+            var cnt = 0
+            for (x in 0 until minOf(r, w)) if (m[row + x]) cnt++
             for (x in 0 until w) {
-                if (!m[row + x]) continue
-                val x0 = max(0, x - 1); val x1 = minOf(w - 1, x + 1)
-                val y0 = max(0, y - 1); val y1 = minOf(h - 1, y + 1)
-                for (yy in y0..y1) for (xx in x0..x1) out[yy * w + xx] = true
+                val add = x + r; if (add < w && m[row + add]) cnt++
+                val rem = x - r - 1; if (rem >= 0 && m[row + rem]) cnt--
+                tmp[row + x] = cnt > 0
+            }
+        }
+        val out = BooleanArray(m.size)
+        for (x in 0 until w) {
+            var cnt = 0
+            for (y in 0 until minOf(r, h)) if (tmp[y * w + x]) cnt++
+            for (y in 0 until h) {
+                val add = y + r; if (add < h && tmp[add * w + x]) cnt++
+                val rem = y - r - 1; if (rem >= 0 && tmp[rem * w + x]) cnt--
+                out[y * w + x] = cnt > 0
             }
         }
         return out
+    }
+
+    /** Treppenstufen glätten: gleitender Mittelwert, Verschiebung höchstens 0,6 px. */
+    private fun smooth(p: FloatArray): FloatArray {
+        val n = p.size / 2
+        if (n < 8) return p
+        var cur = p
+        repeat(2) {
+            val nx = FloatArray(cur.size)
+            for (i in 0 until n) {
+                var sx = 0f; var sy = 0f
+                for (k in -2..2) { val j = ((i + k) % n + n) % n; sx += cur[2 * j]; sy += cur[2 * j + 1] }
+                nx[2 * i] = sx / 5f; nx[2 * i + 1] = sy / 5f
+            }
+            cur = nx
+        }
+        val lim = 0.6f
+        for (i in 0 until n) {
+            val dx = cur[2 * i] - p[2 * i]; val dy = cur[2 * i + 1] - p[2 * i + 1]
+            val d = hypot(dx, dy)
+            if (d > lim) { cur[2 * i] = p[2 * i] + dx / d * lim; cur[2 * i + 1] = p[2 * i + 1] + dy / d * lim }
+        }
+        return cur
     }
 
     /**
@@ -119,7 +161,7 @@ object FillAlgo {
                     cur = nx
                     if (cur == start) break
                 }
-                if (pts.points >= 3) loops.add(removeCollinear(pts.toArray()))
+                if (pts.points >= 3) loops.add(pts.toArray())
             }
         }
         return loops

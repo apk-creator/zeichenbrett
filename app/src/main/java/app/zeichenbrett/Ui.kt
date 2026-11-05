@@ -475,9 +475,10 @@ class SliderView(
 
     private fun pos(v: Float): Float {
         if (v <= anchors[0]) return 0f
+        for (i in 0..segs) if (anchors[i] == v) return i.toFloat() / segs
         for (i in 0 until segs) {
             val a = anchors[i]; val b = anchors[i + 1]
-            if (v <= b) return (i + ln(v / a) / ln(b / a)) / segs
+            if (v <= b) return (i + (if (a <= 0f) v / b else ln(v / a) / ln(b / a))) / segs
         }
         return 1f
     }
@@ -487,6 +488,7 @@ class SliderView(
         val i = x.toInt().coerceAtMost(segs - 1)
         val f = x - i
         val a = anchors[i]; val b = anchors[i + 1]
+        if (a <= 0f) return b * f
         return a * (b / a).pow(f)
     }
 

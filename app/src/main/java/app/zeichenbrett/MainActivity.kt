@@ -17,6 +17,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowInsets
@@ -55,6 +56,7 @@ class MainActivity : Activity(), CanvasView.Host {
         private const val F_IMAGE = 7
         private val DPIS = intArrayOf(75, 150, 300)
         private val PEN_ANCHORS = floatArrayOf(0.1f, 0.3f, 0.5f, 1f, 2.5f, 5f, 10f)
+        private val FILL_ANCHORS = floatArrayOf(0f, 0.1f, 0.3f, 0.5f, 1f, 2.5f, 5f, 10f)
         private val ERASER_ANCHORS = floatArrayOf(1f, 10f, 25f, 50f, 100f)
 
         // Werkzeugpalette
@@ -294,10 +296,10 @@ class MainActivity : Activity(), CanvasView.Host {
         overlay.addView(box, FrameLayout.LayoutParams(min(widthPx, rw - dpi(32f)), ViewGroup.LayoutParams.WRAP_CONTENT,
             Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
             // Alle Dialoge mit gleicher Oberkante; die Bildschirmtastatur verschiebt nichts
-            topMargin = (rh * 0.1f).roundToInt()
+            topMargin = (rh * 0.15f).roundToInt()
         })
         box.post {
-            val top = (rh * 0.1f).roundToInt()
+            val top = (rh * 0.15f).roundToInt()
             val maxH = rh - top - dpi(24f)
             if (box.height > maxH) box.layoutParams = FrameLayout.LayoutParams(box.width, maxH, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = top }
         }
@@ -380,6 +382,9 @@ class MainActivity : Activity(), CanvasView.Host {
         stage.addView(toolBar, lp(Gravity.CENTER_VERTICAL or Gravity.START, m, 0, 0, 0))
         stage.addView(imageBar, lp(Gravity.TOP or Gravity.CENTER_HORIZONTAL, 0, dpi(96f), 0, 0))
         setContentView(root)
+        // Bildschirmtastatur und Systemleisten verändern das Layout nicht
+        window.setDecorFitsSystemWindows(false)
+        root.setOnApplyWindowInsetsListener { _, _ -> WindowInsets.CONSUMED }
         buildBars()
         root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or2, ob ->
             if (r - l != or2 - ol || b - t != ob - ot) ui.post { buildBars(); refreshUi() }
@@ -455,6 +460,8 @@ class MainActivity : Activity(), CanvasView.Host {
 
     private fun fmtWidth(v: Float) = if (v < 1f) String.format(Locale.US, "%.2f", v) else String.format(Locale.US, "%.1f", v)
 
+    private fun fmtTol(v: Float) = if (v == 0f) "0" else fmtWidth(v)
+
     private fun fmtDeg(a: Float): String {
         val m = ((a % 360f) + 360f) % 360f
         return "${m.roundToInt() % 360}°"
@@ -470,12 +477,12 @@ class MainActivity : Activity(), CanvasView.Host {
                 T_ERASER -> tools.tool == Tool.ERASER
                 else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
             }
-            if (k >= T_PEN0 && k < T_ERASER) b.icon = if (tools.tool == Tool.FILL && tools.pen == k - T_PEN0) "bucket" else "pen"
+            if (k >= T_PEN0 && k < T_ERASER) b.icon = if (tools.fillMode[k - T_PEN0]) "bucket" else "pen"
             b.text = when (k) {
                 T_MEASURE -> d?.unit?.label ?: "m"
                 T_RULER -> fmtDeg(((tools.rulerAngle % 180f) + 180f) % 180f)
                 T_ERASER -> "${tools.eraserPct.roundToInt()} %"
-                else -> fmtWidth(tools.penWidth[k - T_PEN0])
+                else -> if (tools.fillMode[k - T_PEN0]) fmtTol(tools.fillTol) else fmtWidth(tools.penWidth[k - T_PEN0])
             }
         }
         onViewChanged()
@@ -537,7 +544,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 alignLeft = true
                 active = doc === d
                 onTap = { labelTap(doc) }
-                onDragStart = { x, y -> startDrag(doc, true, x, y) }
+                onDragStart = { x, y -> startDrag(doc, true, x, y, this) }
                 onDragMove = { x, y -> dragMove(x, y) }
                 onDragEnd = { x, y, c -> dragEnd(x, y, c) }
             }
@@ -586,6 +593,10 @@ class MainActivity : Activity(), CanvasView.Host {
         var inBar = false
         var hoverIdx = -1
         val origin = IntArray(2)
+        var grabX = 0f
+        var grabY = 0f
+        var ghostW = 0
+        var ghostH = 0
     }
 
     private var drag: Drag? = null
@@ -613,12 +624,16 @@ class MainActivity : Activity(), CanvasView.Host {
         g.bar.addView(Btn(this).apply { icon = if (docs.size > docBarSlots) "chevron" else "plus" }, LinearLayout.LayoutParams(btnSize, btnSize))
     }
 
-    private fun startDrag(doc: PageDoc, fromBar: Boolean, rawX: Float, rawY: Float) {
+    private fun startDrag(doc: PageDoc, fromBar: Boolean, rawX: Float, rawY: Float, src: View) {
         if (drag != null) return
         lastLabelDoc = null
         val g = Drag(doc, !fromBar)
         drag = g
         root.getLocationOnScreen(g.origin)
+        // Label bleibt zunächst an Ort und Stelle und wird von dort weggezogen
+        val sl = IntArray(2); src.getLocationOnScreen(sl)
+        g.grabX = rawX - sl[0]; g.grabY = rawY - sl[1]
+        g.ghostW = src.width; g.ghostH = src.height
         if (fromBar) {
             val idx = docs.indexOf(doc)
             if (idx in 0 until docBarSlots) g.placeholder = idx
@@ -643,9 +658,9 @@ class MainActivity : Activity(), CanvasView.Host {
         val ghostBox = FrameLayout(this).apply {
             background = ShadowBg(this@MainActivity)
             setPadding(ins, ins, ins, ins)
-            addView(g.ghost, FrameLayout.LayoutParams(docSlot, btnSize))
+            addView(g.ghost, FrameLayout.LayoutParams(g.ghostW, g.ghostH))
         }
-        g.layer.addView(ghostBox, FrameLayout.LayoutParams(docSlot + 2 * ins, btnSize + 2 * ins).apply { gravity = Gravity.TOP or Gravity.START })
+        g.layer.addView(ghostBox, FrameLayout.LayoutParams(g.ghostW + 2 * ins, g.ghostH + 2 * ins).apply { gravity = Gravity.TOP or Gravity.START })
         root.addView(g.layer, root.indexOfChild(stage) + 1, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         docBar.alpha = 0f
         popup?.alpha = 0f
@@ -657,8 +672,9 @@ class MainActivity : Activity(), CanvasView.Host {
         val g = drag ?: return
         val x = rawX - g.origin[0]; val y = rawY - g.origin[1]
         val gb = g.ghost.parent as View
-        gb.translationX = x - gb.width / 2f
-        gb.translationY = y - gb.height / 2f
+        val ins = shadowInset(this)
+        gb.translationX = x - g.grabX - ins
+        gb.translationY = y - g.grabY - ins
         // Über dem „X“?
         val xl = IntArray(2); val rl = IntArray(2)
         g.xBtn.getLocationInWindow(xl); root.getLocationInWindow(rl)
@@ -764,7 +780,7 @@ class MainActivity : Activity(), CanvasView.Host {
                 alignLeft = true
                 active = doc === d
                 onTap = { dismissPopup(); activate(doc) }
-                onDragStart = { x, y -> startDrag(doc, false, x, y) }
+                onDragStart = { x, y -> startDrag(doc, false, x, y, this) }
                 onDragMove = { x, y -> dragMove(x, y) }
                 onDragEnd = { x, y, c -> dragEnd(x, y, c) }
             }
@@ -823,6 +839,26 @@ class MainActivity : Activity(), CanvasView.Host {
         popupFor = key
     }
 
+    /** Werkzeug, dessen Regler beim aktuellen Antippen geschlossen wurde. */
+    private var touchDismissed = -1
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchDismissed = -1
+            val pv = popup
+            // Offene Regler schließen sich bei jeder anderen Aktion (das Dokumentmenü hat seinen eigenen Fänger)
+            if (pv != null && popupFor >= 0) {
+                val r = android.graphics.Rect()
+                if (!pv.getGlobalVisibleRect(r) || !r.contains(ev.rawX.toInt(), ev.rawY.toInt())) {
+                    touchDismissed = popupFor
+                    dismissPopup()
+                    canvasView.hideSizePreview()
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
     private fun dismissPopup() {
         val wasDocs = popupFor == -2
         popup?.let { stage.removeView(it) }
@@ -860,24 +896,27 @@ class MainActivity : Activity(), CanvasView.Host {
             T_ERASER -> tools.tool == Tool.ERASER
             else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
         }
+        if (isActive && k >= T_PEN0 && k < T_ERASER && touchDismissed == k) return
         if (isActive && k >= T_PEN0 && k < T_ERASER) {
             // Aktiver Stift: zwischen Stift und Füllen umschalten
             dismissPopup()
-            tools.tool = if (tools.tool == Tool.FILL) Tool.PEN else Tool.FILL
+            val i = k - T_PEN0
+            tools.fillMode[i] = !tools.fillMode[i]
+            tools.tool = if (tools.fillMode[i]) Tool.FILL else Tool.PEN
             canvasView.clearMeasure()
             canvasView.invalidate()
             refreshUi()
             return
         }
         if (isActive) {
-            if (popupFor == k) dismissPopup() else showToolPopup(k)
+            if (popupFor == k || touchDismissed == k) dismissPopup() else showToolPopup(k)
             return
         }
         dismissPopup()
         when (k) {
             T_MEASURE -> { tools.tool = Tool.MEASURE; tools.rulerOn = false }
             T_ERASER -> tools.tool = Tool.ERASER
-            else -> { tools.tool = Tool.PEN; tools.pen = k - T_PEN0 }
+            else -> { tools.pen = k - T_PEN0; tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN }
         }
         if (k != T_MEASURE) canvasView.clearMeasure()
         canvasView.invalidate()
@@ -889,7 +928,7 @@ class MainActivity : Activity(), CanvasView.Host {
         when (k) {
             T_MEASURE -> { tools.tool = Tool.MEASURE; tools.rulerOn = false }
             T_ERASER -> tools.tool = Tool.ERASER
-            else -> { if (!(tools.tool == Tool.FILL && tools.pen == k - T_PEN0)) tools.tool = Tool.PEN; tools.pen = k - T_PEN0 }
+            else -> { tools.pen = k - T_PEN0; tools.tool = if (tools.fillMode[tools.pen]) Tool.FILL else Tool.PEN }
         }
         if (k != T_MEASURE) canvasView.clearMeasure()
         canvasView.invalidate()
@@ -927,6 +966,16 @@ class MainActivity : Activity(), CanvasView.Host {
                     toolBtns[T_ERASER].text = label.text
                     canvasView.showSizePreview(null, canvasView.eraserPxFor(tools.eraserPct), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() })
+            } else if (tools.fillMode[k - T_PEN0]) {
+                val idx = k - T_PEN0
+                label.text = fmtTol(tools.fillTol) + " pt"
+                // Vorschau: Kreis mit der überbrückten Öffnung, in Originalgröße (100 %)
+                slider = SliderView(this, FILL_ANCHORS, tools.fillTol, { v ->
+                    tools.fillTol = v
+                    label.text = fmtTol(tools.fillTol) + " pt"
+                    refreshUi()
+                    canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol * canvasView.pxPerPt(), prevX, prevBottom)
+                }, { canvasView.hideSizePreview() }, discrete = true)
             } else {
                 val idx = k - T_PEN0
                 label.text = fmtWidth(tools.penWidth[idx]) + " pt"
@@ -938,7 +987,11 @@ class MainActivity : Activity(), CanvasView.Host {
                 }, { canvasView.hideSizePreview() }, discrete = true)
             }
             // Gleiche Abstände zwischen den Fangpunkten wie bei den Stiften (45 dp je Abschnitt)
-            val segs = (if (k == T_ERASER) ERASER_ANCHORS.size else PEN_ANCHORS.size) - 1
+            val segs = (when {
+                k == T_ERASER -> ERASER_ANCHORS.size
+                tools.fillMode[k - T_PEN0] -> FILL_ANCHORS.size
+                else -> PEN_ANCHORS.size
+            }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
             box.addView(label, LinearLayout.LayoutParams((btnSize * 1.8f).roundToInt(), btnSize))
             if (k == T_ERASER) {
