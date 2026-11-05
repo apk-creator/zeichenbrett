@@ -1,6 +1,7 @@
 package app.zeichenbrett
 
 import com.tom_roush.pdfbox.util.Matrix
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
@@ -88,28 +89,58 @@ object Geo {
             if (bb.right + hw < minX || bb.left - hw > maxX || bb.bottom + hw < minY || bb.top - hw > maxY) {
                 out.add(it); continue
             }
-            val parts = split(it, ax, ay, bx, by, r + hw)
+            val parts = split(it, ax, ay, bx, by, r)
             if (parts == null) out.add(it) else { changed = true; out.addAll(parts) }
         }
         return if (changed) out else null
     }
 
-    /** Radierkapsel (a→b, Radius r) aus der Füllung ausschneiden; null = unverändert. */
-    private fun eraseFill(f: Fill, ax: Float, ay: Float, bx: Float, by: Float, r: Float): Fill? {
-        val cap = android.graphics.Path()
-        cap.addCircle(ax, ay, r, android.graphics.Path.Direction.CW)
+    /** Radierkapsel als Vieleck (nur gerade Kanten: schnell und ohne Punktzuwachs). */
+    private fun capsulePath(ax: Float, ay: Float, bx: Float, by: Float, r: Float): android.graphics.Path {
+        val path = android.graphics.Path()
         val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
-        if (len > 1e-4f) {
-            cap.addCircle(bx, by, r, android.graphics.Path.Direction.CW)
-            val nx = -(by - ay) / len * r; val ny = (bx - ax) / len * r
-            cap.moveTo(ax + nx, ay + ny); cap.lineTo(bx + nx, by + ny); cap.lineTo(bx - nx, by - ny); cap.lineTo(ax - nx, ay - ny); cap.close()
+        val seg = 12
+        if (len < 1e-4f) {
+            for (k in 0 until 2 * seg) {
+                val t = Math.PI * k / seg
+                val x = (bx + r * cos(t)).toFloat(); val y = (by + r * sin(t)).toFloat()
+                if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+        } else {
+            val base = kotlin.math.atan2((by - ay).toDouble(), (bx - ax).toDouble())
+            // Halbkreis um b (vorne), dann Halbkreis um a (hinten)
+            for (k in 0..seg) {
+                val t = base - Math.PI / 2 + Math.PI * k / seg
+                val x = (bx + r * cos(t)).toFloat(); val y = (by + r * sin(t)).toFloat()
+                if (k == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            for (k in 0..seg) {
+                val t = base + Math.PI / 2 + Math.PI * k / seg
+                path.lineTo((ax + r * cos(t)).toFloat(), (ay + r * sin(t)).toFloat())
+            }
         }
-        val src = f.path
+        path.close()
+        return path
+    }
+
+    /** Radierkapsel aus der Füllung ausschneiden; null = unverändert. */
+    private fun eraseFill(f: Fill, ax: Float, ay: Float, bx: Float, by: Float, r: Float): Fill? {
+        // Schnelltest: berührt die Kapsel überhaupt eine Kante oder liegt sie innen?
+        val cap = capsulePath(ax, ay, bx, by, r)
         val hit = android.graphics.Path()
-        if (!hit.op(src, cap, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
+        if (!hit.op(f.path, cap, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
         val outP = android.graphics.Path()
-        if (!outP.op(src, cap, android.graphics.Path.Op.DIFFERENCE)) return null
-        return Fill(f.color, polysOf(outP), f.under)
+        if (!outP.op(f.path, cap, android.graphics.Path.Op.DIFFERENCE)) return null
+        // Vereinfachen, winzige Reste verwerfen: die Punktzahl bleibt klein
+        val polys = polysOf(outP).map { FillAlgo.simplify(it, 0.01f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
+        return Fill(f.color, polys, f.under)
+    }
+
+    private fun area(p: FloatArray): Float {
+        var a = 0f
+        val n = p.size / 2
+        for (i in 0 until n) { val j = (i + 1) % n; a += p[2 * i] * p[2 * j + 1] - p[2 * j] * p[2 * i + 1] }
+        return a / 2f
     }
 
     /** Konturen eines Pfads als Polygone (Kurven angenähert). */
@@ -132,51 +163,96 @@ object Geo {
         return out
     }
 
+    /**
+     * Bereich [t0, t1] eines Segments P(t) = (x0,y0) + t·(x1−x0, y1−y0), der in der Radierkapsel
+     * (Abstand ≤ rr zur Strecke a–b) liegt. Analytisch: Kreise um a und b plus Rechteck dazwischen.
+     */
+    private fun capsuleInterval(x0: Float, y0: Float, x1: Float, y1: Float, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): FloatArray? {
+        val dx = (x1 - x0).toDouble(); val dy = (y1 - y0).toDouble()
+        var lo = Double.MAX_VALUE; var hi = -Double.MAX_VALUE
+        fun circle(cx: Float, cy: Float) {
+            val fx = (x0 - cx).toDouble(); val fy = (y0 - cy).toDouble()
+            val A = dx * dx + dy * dy
+            val B = 2 * (fx * dx + fy * dy)
+            val C = fx * fx + fy * fy - rr.toDouble() * rr
+            if (A < 1e-12) { if (C <= 0) { lo = min(lo, 0.0); hi = max(hi, 1.0) }; return }
+            val disc = B * B - 4 * A * C
+            if (disc < 0) return
+            val sq = sqrt(disc)
+            lo = min(lo, (-B - sq) / (2 * A)); hi = max(hi, (-B + sq) / (2 * A))
+        }
+        circle(ax, ay); circle(bx, by)
+        // Rechteck im lokalen System der Kapsel: u ∈ [0, L], v ∈ [−rr, rr]
+        val ex = (bx - ax).toDouble(); val ey = (by - ay).toDouble()
+        val L = sqrt(ex * ex + ey * ey)
+        if (L > 1e-9) {
+            val ux = ex / L; val uy = ey / L
+            val u0 = (x0 - ax) * ux + (y0 - ay) * uy; val du = dx * ux + dy * uy
+            val v0 = -(x0 - ax) * uy + (y0 - ay) * ux; val dv = -dx * uy + dy * ux
+            var t0 = -1e18; var t1 = 1e18
+            fun clip(p0: Double, dp: Double, mn: Double, mx: Double): Boolean {
+                if (abs(dp) < 1e-12) return p0 >= mn && p0 <= mx
+                var a = (mn - p0) / dp; var b = (mx - p0) / dp
+                if (a > b) { val t = a; a = b; b = t }
+                t0 = max(t0, a); t1 = min(t1, b)
+                return t0 <= t1
+            }
+            if (clip(u0, du, 0.0, L) && clip(v0, dv, -rr.toDouble(), rr.toDouble())) { lo = min(lo, t0); hi = max(hi, t1) }
+        }
+        if (lo > hi) return null
+        val a = max(lo, 0.0); val b = min(hi, 1.0)
+        // Berührung oder nur ein Hauch: unverändert lassen (verhindert Zerfasern am Schnittrand)
+        val segLen = sqrt(dx * dx + dy * dy)
+        if (b <= a || (b - a) * segLen < 0.005) return null
+        return floatArrayOf(a.toFloat(), b.toFloat())
+    }
+
+    /**
+     * Strich exakt am Rand der Radierkapsel (Abstand rr zur Mittellinie) schneiden.
+     * Neue Enden sind gerade, wie der Schnitt durch eine Füllung.
+     */
     private fun split(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): List<Stroke>? {
         val p = s.pts
         val n = p.size / 2
-        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr) emptyList() else null
-
-        // Segmente in Radiernähe fein unterteilen
-        val step = max(rr * 0.4f, 0.02f)
-        val res = FList(p.size + 64)
-        res.add(p[0], p[1])
-        var anyNear = false
+        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr + s.width / 2f) emptyList() else null
+        val out = ArrayList<Stroke>()
+        val run = FList(p.size + 8)
+        var runRound = s.rs
+        var removed = false
+        fun flush(endRound: Boolean) {
+            if (run.points >= 2) {
+                val a = run.toArray()
+                // Teilstücke ohne Länge verwerfen
+                var len = 0f
+                for (k in 0 until a.size / 2 - 1) len += sqrt((a[2 * k + 2] - a[2 * k]).let { it * it } + (a[2 * k + 3] - a[2 * k + 1]).let { it * it })
+                if (len > 0.01f) out.add(Stroke(s.color, s.width, a, runRound, endRound))
+            }
+            run.clear()
+        }
         for (i in 0 until n - 1) {
             val x0 = p[2 * i]; val y0 = p[2 * i + 1]
             val x1 = p[2 * i + 2]; val y1 = p[2 * i + 3]
-            val near = segSegDist(x0, y0, x1, y1, ax, ay, bx, by) <= rr
-            if (near) {
-                anyNear = true
-                val len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
-                val k = max(1, ceil(len / step).toInt())
-                for (j in 1..k) {
-                    val t = j.toFloat() / k
-                    res.add(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
-                }
-            } else {
-                res.add(x1, y1)
+            val iv = capsuleInterval(x0, y0, x1, y1, ax, ay, bx, by, rr)
+            if (iv == null) {
+                if (run.n == 0) run.add(x0, y0)
+                run.add(x1, y1)
+                continue
             }
-        }
-        if (!anyNear) return null
-
-        val out = ArrayList<Stroke>()
-        val run = FList(res.n)
-        var removed = false
-        var i = 0
-        while (i < res.n) {
-            val x = res.a[i]; val y = res.a[i + 1]
-            if (distPtSeg(x, y, ax, ay, bx, by) > rr) {
-                run.add(x, y)
-            } else {
-                removed = true
-                if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
-                run.clear()
+            removed = true
+            val t0 = iv[0]; val t1 = iv[1]
+            if (t0 > 0f) {
+                if (run.n == 0) run.add(x0, y0)
+                run.add(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0)
             }
-            i += 2
+            flush(false)
+            runRound = false
+            if (t1 < 1f) {
+                run.add(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1)
+                run.add(x1, y1)
+            }
         }
         if (!removed) return null
-        if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
+        flush(s.re)
         return out
     }
 }
