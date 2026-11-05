@@ -86,7 +86,7 @@ class Fill(val color: Int, val polys: List<FloatArray>) : Item() {
     val bounds: RectF = RectF().also { r -> polys.forEachIndexed { i, p -> if (i == 0) r.set(boundsOf(p)) else r.union(boundsOf(p)) } }
     val path: Path by lazy {
         Path().also { path ->
-            path.fillType = Path.FillType.EVEN_ODD
+            path.fillType = Path.FillType.WINDING
             for (p in polys) { path.addPath(pathOf(p)); path.close() }
         }
     }
@@ -185,6 +185,8 @@ class PageDoc(val id: String, val workDir: File) {
     var pageH = 842f
     var scale = 100
     var unit = MUnit.M
+    /** Maßeinheit beim Öffnen/Anlegen (Doppeltipp auf „Messen“ setzt zurück). */
+    var initUnit = MUnit.M
     var dpi = 150
     var bgColor = Pal.PAPER
     var backupDone = false

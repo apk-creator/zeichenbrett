@@ -271,7 +271,7 @@ object PdfIO {
             while (i + 1 < p.size) { cs.lineTo(p[i], H - p[i + 1]); i += 2 }
             cs.closePath()
         }
-        cs.fillEvenOdd()
+        cs.fill()
         if (mul) cs.restoreGraphicsState()
     }
 

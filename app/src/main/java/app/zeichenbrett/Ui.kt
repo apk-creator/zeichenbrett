@@ -410,8 +410,8 @@ object Icons {
                 p.style = Paint.Style.FILL
                 c.drawRoundRect(8.5f, 2.5f, 15.5f, 6f, 1.2f, 1.2f, p)
                 p.style = Paint.Style.STROKE
-                p.strokeWidth = 2.4f
-                c.drawLine(2.5f, 21.5f, 21.5f, 2.5f, p)
+                p.strokeWidth = 1.8f
+                c.drawLine(2.5f, 21.5f, 19.5f, 4.5f, p)
             }
             "check" -> {
                 path.moveTo(5f, 12.5f); path.lineTo(10f, 17.5f); path.lineTo(19.5f, 7f)
@@ -499,15 +499,14 @@ class SliderView(
         val y = height / 2f
         p.style = Paint.Style.STROKE
         p.strokeCap = Paint.Cap.ROUND
-        p.color = Pal.GREY; p.strokeWidth = context.dp(3f)
+        p.color = Pal.BLACK; p.strokeWidth = context.dp(1f)
         c.drawLine(pad, y, pad + w, y, p)
-        p.color = Pal.BLACK; p.strokeWidth = context.dp(1.5f)
         for (i in 0..segs) {
             val x = pad + i.toFloat() / segs * w
             c.drawLine(x, y - context.dp(8f), x, y + context.dp(8f), p)
         }
         p.style = Paint.Style.FILL
-        c.drawCircle(pad + pos(value) * w, y, context.dp(10f), p)
+        c.drawCircle(pad + pos(value) * w, y, context.dp(5f), p)
     }
 
     @SuppressLint("ClickableViewAccessibility")

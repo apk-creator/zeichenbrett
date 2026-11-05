@@ -951,6 +951,11 @@ class MainActivity : Activity(), CanvasView.Host {
     /** Doppeltipp: Größe des Werkzeugs auf den Standardwert. */
     private fun resetSize(k: Int) {
         when {
+            k == T_MEASURE -> {
+                val d = active ?: return
+                d.unit = d.initUnit; d.dirty = true
+                canvasView.refreshMeasure(); canvasView.invalidate()
+            }
             k == T_ERASER -> tools.eraserPct = ToolState.DEF_ERASER_PCT
             k in T_PEN0 until T_ERASER -> {
                 val i = k - T_PEN0
@@ -1043,7 +1048,6 @@ class MainActivity : Activity(), CanvasView.Host {
                     tools.fillPct[idx] = v.roundToInt().toFloat().coerceIn(0f, 100f)
                     label.text = "${tools.fillPct[idx].roundToInt()} %"
                     toolBtns[k].text = label.text
-                    canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol(idx) * canvasView.pxPerPt(), prevX, prevBottom)
                 }, { canvasView.hideSizePreview() }, snaps = false)
             } else {
                 val idx = k - T_PEN0
@@ -1062,7 +1066,6 @@ class MainActivity : Activity(), CanvasView.Host {
                 else -> PEN_ANCHORS.size
             }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
-            box.addView(label, LinearLayout.LayoutParams((btnSize * 1.8f).roundToInt(), btnSize))
             if (k != T_ERASER && tools.fillMode[k - T_PEN0]) {
                 // Füllen: Hintergrund ignorieren (aktiv) oder als Grenze berücksichtigen
                 val bg = Btn(this)
@@ -1070,14 +1073,14 @@ class MainActivity : Activity(), CanvasView.Host {
                 val fi = k - T_PEN0
                 bg.active = !tools.fillBackground[fi]
                 bg.onTap = { tools.fillBackground[fi] = !tools.fillBackground[fi]; bg.active = !tools.fillBackground[fi] }
-                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize))
+                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize).apply { marginStart = -dpi(8f) })
             }
             if (k == T_ERASER) {
                 val bg = Btn(this)
                 bg.icon = "nobg"
                 bg.active = !tools.eraseBackground
                 bg.onTap = { tools.eraseBackground = !tools.eraseBackground; bg.active = !tools.eraseBackground }
-                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize))
+                box.addView(bg, LinearLayout.LayoutParams(btnSize, btnSize).apply { marginStart = -dpi(8f) })
             }
         }
         val btn = toolBtns[k]
@@ -1206,6 +1209,7 @@ class MainActivity : Activity(), CanvasView.Host {
             toast("Maximal $MAX_DOCS Dokumente geöffnet.")
             return
         }
+        d.initUnit = d.unit
         docs.add(d)
         activate(d)
     }
@@ -1536,8 +1540,8 @@ class MainActivity : Activity(), CanvasView.Host {
     }
 
     private fun askImage(name: String, tmp: File, isJpeg: Boolean, pw: Int, ph: Int, fileDpi: Int?, back: (() -> Unit)? = null) {
-        val dpi = fileDpi ?: 150
-        val info = "Bild: $pw × $ph Pixel · " + (if (fileDpi != null) "$fileDpi DPI" else "keine DPI-Angabe, 150 DPI angenommen")
+        val dpi = fileDpi ?: 300
+        val info = "Bild: $pw × $ph Pixel" + (if (fileDpi != null) " · $fileDpi DPI" else "")
         settingsDialog(Kind.IMAGE, name, info, DocSettings(F_IMAGE, pw > ph, dpi, 100, MUnit.M), false, back?.let { b -> { tmp.delete(); b() } }) { s, _ ->
             if (s == null) { tmp.delete(); if (docs.isEmpty()) showStart(); return@settingsDialog }
             val d = newDoc(name)
@@ -1592,7 +1596,7 @@ class MainActivity : Activity(), CanvasView.Host {
                     }
                     "image/jpeg", "image/png" -> {
                         val isJpeg = mime == "image/jpeg"
-                        val fileDpi = Img.readDpi(tmp, isJpeg) ?: 150
+                        val fileDpi = Img.readDpi(tmp, isJpeg) ?: 300
                         val norm = Img.normalize(tmp, File(d.workDir, "imp_$id." + if (isJpeg) "jpg" else "png"), isJpeg)
                         ImageItem(id, false, norm.isJpeg, norm.file.path, norm.w.toFloat(), norm.h.toFloat(), 0f, 0f, 1f, 1f, 0f, false, fileDpi.toFloat())
                     }
