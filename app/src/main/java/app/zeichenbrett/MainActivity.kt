@@ -584,7 +584,7 @@ class MainActivity : Activity(), CanvasView.Host {
             val v: View = if (i == g.placeholder) View(this) else {
                 val doc = order.getOrNull(k++)
                 if (doc == null) View(this) else Btn(this).apply {
-                    text = labelText(doc); textSp = 16f; alignLeft = true; active = doc === this@MainActivity.active
+                    text = labelText(doc); textSp = 16f; alignLeft = true; active = doc === this@MainActivity.active && g.doc === this@MainActivity.active
                 }
             }
             g.bar.addView(v, LinearLayout.LayoutParams(docSlot, btnSize).apply { marginEnd = gap })
@@ -692,6 +692,8 @@ class MainActivity : Activity(), CanvasView.Host {
                 if (target >= 0) {
                     docs.remove(g.doc)
                     docs.add(target.coerceAtMost(docs.size), g.doc)
+                    // Ein inaktives Dokument, das in die Leiste gezogen wurde, wird aktiv
+                    if (g.doc !== active) { activate(g.doc); return }
                 }
             }
         }
@@ -715,7 +717,12 @@ class MainActivity : Activity(), CanvasView.Host {
                 "Abbrechen" to {},
                 "OK" to {
                     val t = et.text.toString().trim()
-                    if (t.isNotEmpty() && t != d.title) { d.title = t; refreshUi() }
+                    if (t.isNotEmpty() && t != d.title) {
+                        d.title = t
+                        d.dirty = true          // damit der neue Name auch wiederhergestellt wird
+                        autosaveDoc(d)
+                        refreshUi()
+                    }
                 },
             ),
             cancelable = true,

@@ -652,7 +652,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         return super.onHoverEvent(e)
     }
 
-    private fun penBlocksFingers() = penNear || SystemClock.uptimeMillis() - lastPenSeen < 400
+    private fun penBlocksFingers() = penNear || SystemClock.uptimeMillis() - lastPenSeen < 100
 
     private fun isPalm(e: MotionEvent, i: Int): Boolean {
         if (e.getToolType(i) == 5 /* TOOL_TYPE_PALM */) return true
@@ -1066,6 +1066,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private var rotating = false
     private var imgRotG = false
     private var g0img = 0f
+    private var g0iw = 0f; private var g0ih = 0f; private var g0icx = 0f; private var g0icy = 0f
+    private var g0ang0 = 0f
+    private var g0time = 0L
+    private var lastCx2 = 0f; private var lastCy2 = 0f; private var lastAng2 = 0f
     private var lastAng = 0f
     private var lastAngT = 0L
     private var angSpeed = 0f
@@ -1085,6 +1089,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
         if (fCount == 2 && ids.size == 2 && ids[0] == fIds[0] && ids[1] == fIds[1]) return
         if (fCount == 2 && imgRotG) { imgRotG = false; host.onDocEdited() }
+        else if (fCount == 2 && !onRulerG) flickRotate(d)
         fCount = ids.size
         if (fCount == 1) {
             fIds[0] = ids[0]
@@ -1099,6 +1104,22 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     private fun endFingers() { fCount = 0 }
 
+    /**
+     * Schnelle, kurze Drehung (bis ±85°): Plan springt in Drehrichtung auf den nächsten 90°-Schritt.
+     */
+    private fun flickRotate(d: PageDoc) {
+        if (!rotating || tools.rotLocked) return
+        val dur = SystemClock.uptimeMillis() - g0time
+        val total = angleDiff(lastAng2, g0ang0)
+        if (dur > 450 || abs(total) > 85f || abs(total) * 1000f / dur.coerceAtLeast(1L) < 120f) return
+        val cur = d.rot
+        val target = if (total > 0) (kotlin.math.floor(cur / 90f + 1e-3f) + 1f) * 90f
+                     else (kotlin.math.ceil(cur / 90f - 1e-3f) - 1f) * 90f
+        d.rot = ((target % 360f) + 360f) % 360f
+        place(d, g0px, g0py, lastCx2, lastCy2)
+        viewChanged()
+    }
+
     private fun startTwo(d: PageDoc, e: MotionEvent) {
         val i0 = e.findPointerIndex(fIds[0]); val i1 = e.findPointerIndex(fIds[1])
         if (i0 < 0 || i1 < 0) { fCount = 0; return }
@@ -1106,6 +1127,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         g0cx = (x0 + x1) / 2f; g0cy = (y0 + y1) / 2f
         g0span = max(hypot(x1 - x0, y1 - y0), 1f)
         g0ang = Math.toDegrees(atan2((y1 - y0).toDouble(), (x1 - x0).toDouble())).toFloat()
+        g0ang0 = g0ang; lastAng2 = g0ang
+        g0time = SystemClock.uptimeMillis()
+        lastCx2 = g0cx; lastCy2 = g0cy
         g0zoom = d.zoom; g0rot = d.rot
         val p = toDoc(d, g0cx, g0cy)
         g0px = p.x; g0py = p.y
@@ -1121,6 +1145,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             if (insideItem(sel, p0.x, p0.y, m) && insideItem(sel, p1.x, p1.y, m)) {
                 imgRotG = true
                 g0img = sel.angle
+                g0iw = sel.w; g0ih = sel.h; g0icx = sel.cx; g0icy = sel.cy
                 d.pushUndo()
             }
         }
@@ -1145,13 +1170,17 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val cx = (x0 + x1) / 2f; val cy = (y0 + y1) / 2f
             val span = max(hypot(x1 - x0, y1 - y0), 1f)
             val ang = Math.toDegrees(atan2((y1 - y0).toDouble(), (x1 - x0).toDouble())).toFloat()
+            lastCx2 = cx; lastCy2 = cy; lastAng2 = ang
             val now = SystemClock.uptimeMillis()
             val dt = (now - lastAngT).coerceAtLeast(1L)
             angSpeed = angSpeed * 0.6f + 0.4f * abs(angleDiff(ang, lastAng)) * 1000f / dt
             lastAng = ang; lastAngT = now
             if (imgRotG) {
+                // Bild drehen und proportional skalieren (Mitte bleibt)
                 val na = ((g0img + angleDiff(ang, g0ang)) % 360f + 360f) % 360f
-                updateSel(d) { it.copy(angle = na) }
+                val k = span / g0span
+                val nw = (g0iw * k).coerceAtLeast(5f); val nh = nw * g0ih / g0iw
+                updateSel(d) { it.copy(angle = na, w = nw, h = nh, x = g0icx - nw / 2f, y = g0icy - nh / 2f) }
                 d.dirty = true
                 invalidate()
                 return
@@ -1171,9 +1200,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             }
             if (!tools.rotLocked) {
                 var delta = angleDiff(ang, g0ang)
-                if (!rotating && abs(delta) > 12f) {
+                if (!rotating && abs(delta) > 15f) {
                     rotating = true
-                    g0ang += 12f * sign(delta)
+                    g0ang += 15f * sign(delta)
                     delta = angleDiff(ang, g0ang)
                 }
                 d.rot = if (rotating) snapIfFast(g0rot + delta, 45f).roundToInt().toFloat() % 360f else g0rot

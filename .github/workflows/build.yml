@@ -30,8 +30,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp app/build/outputs/apk/release/app-release.apk klemmbrett.apk
+          NAME="Klemmbrett_v1.${{ github.run_number }}_beta"
+          cp app/build/outputs/apk/release/app-release.apk "$NAME.apk"
           gh release delete latest -y --cleanup-tag || true
-          gh release create latest klemmbrett.apk \
-            --title "Klemmbrett Build ${{ github.run_number }}" \
-            --notes "Automatischer Build von ${{ github.sha }}"
+          gh release create "v1.${{ github.run_number }}" "$NAME.apk" \
+            --title "$NAME" \
+            --notes "Automatischer Build von ${{ github.sha }}" \
+            --latest

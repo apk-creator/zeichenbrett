@@ -397,7 +397,8 @@ object Icons {
                 c.drawPath(path, p)
             }
             "fit" -> {
-                // Rechteck, proportional gefüllt von einem um 45° gedrehten Quadrat
+                // Rechteck, proportional gefüllt von einem Kreis
+                p.strokeWidth = 1.1f
                 c.drawRect(2.5f, 5.5f, 21.5f, 18.5f, p)
                 p.style = Paint.Style.FILL
                 c.drawCircle(12f, 12f, 6.5f, p)
@@ -412,10 +413,10 @@ object Icons {
             }
             "center" -> {
                 // Vier Pfeile, die zur Mitte zeigen
-                path.moveTo(12f, 2.5f); path.lineTo(12f, 9.5f); path.moveTo(9.5f, 7f); path.lineTo(12f, 9.5f); path.lineTo(14.5f, 7f)
-                path.moveTo(12f, 21.5f); path.lineTo(12f, 14.5f); path.moveTo(9.5f, 17f); path.lineTo(12f, 14.5f); path.lineTo(14.5f, 17f)
-                path.moveTo(2.5f, 12f); path.lineTo(9.5f, 12f); path.moveTo(7f, 9.5f); path.lineTo(9.5f, 12f); path.lineTo(7f, 14.5f)
-                path.moveTo(21.5f, 12f); path.lineTo(14.5f, 12f); path.moveTo(17f, 9.5f); path.lineTo(14.5f, 12f); path.lineTo(17f, 14.5f)
+                path.moveTo(12f, 1.5f); path.lineTo(12f, 8f); path.moveTo(9.7f, 5.7f); path.lineTo(12f, 8f); path.lineTo(14.3f, 5.7f)
+                path.moveTo(12f, 22.5f); path.lineTo(12f, 16f); path.moveTo(9.7f, 18.3f); path.lineTo(12f, 16f); path.lineTo(14.3f, 18.3f)
+                path.moveTo(1.5f, 12f); path.lineTo(8f, 12f); path.moveTo(5.7f, 9.7f); path.lineTo(8f, 12f); path.lineTo(5.7f, 14.3f)
+                path.moveTo(22.5f, 12f); path.lineTo(16f, 12f); path.moveTo(18.3f, 9.7f); path.lineTo(16f, 12f); path.lineTo(18.3f, 14.3f)
                 c.drawPath(path, p)
             }
             "rotate" -> {
