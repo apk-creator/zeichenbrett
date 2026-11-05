@@ -75,8 +75,11 @@ object Geo {
         val out = ArrayList<Item>(items.size + 4)
         for (it in items) {
             if (it is Fill) {
-                // Füllungen werden als Ganzes entfernt, wenn der Radierer sie berührt
-                if (it.contains(bx, by) || it.contains(ax, ay)) changed = true else out.add(it)
+                // Füllungen werden geometrisch ausgeschnitten
+                val fb = it.bounds
+                if (fb.right < minX || fb.left > maxX || fb.bottom < minY || fb.top > maxY) { out.add(it); continue }
+                val res = eraseFill(it, ax, ay, bx, by, r)
+                if (res == null) out.add(it) else { changed = true; if (res.polys.isNotEmpty()) out.add(res) }
                 continue
             }
             if (it !is Stroke) { out.add(it); continue }
@@ -89,6 +92,44 @@ object Geo {
             if (parts == null) out.add(it) else { changed = true; out.addAll(parts) }
         }
         return if (changed) out else null
+    }
+
+    /** Radierkapsel (a→b, Radius r) aus der Füllung ausschneiden; null = unverändert. */
+    private fun eraseFill(f: Fill, ax: Float, ay: Float, bx: Float, by: Float, r: Float): Fill? {
+        val cap = android.graphics.Path()
+        cap.addCircle(ax, ay, r, android.graphics.Path.Direction.CW)
+        val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
+        if (len > 1e-4f) {
+            cap.addCircle(bx, by, r, android.graphics.Path.Direction.CW)
+            val nx = -(by - ay) / len * r; val ny = (bx - ax) / len * r
+            cap.moveTo(ax + nx, ay + ny); cap.lineTo(bx + nx, by + ny); cap.lineTo(bx - nx, by - ny); cap.lineTo(ax - nx, ay - ny); cap.close()
+        }
+        val src = f.path
+        val hit = android.graphics.Path()
+        if (!hit.op(src, cap, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
+        val outP = android.graphics.Path()
+        if (!outP.op(src, cap, android.graphics.Path.Op.DIFFERENCE)) return null
+        return Fill(f.color, polysOf(outP))
+    }
+
+    /** Konturen eines Pfads als Polygone (Kurven angenähert). */
+    fun polysOf(p: android.graphics.Path): List<FloatArray> {
+        val a = p.approximate(0.02f)
+        val out = ArrayList<FloatArray>()
+        val cur = FList()
+        var i = 0
+        while (i + 2 < a.size) {
+            val fr = a[i]; val x = a[i + 1]; val y = a[i + 2]
+            // Sprung zur nächsten Kontur: zwei Punkte mit gleichem Anteil
+            if (i > 0 && fr == a[i - 3] && cur.n > 0 && (x != a[i - 2] || y != a[i - 1])) {
+                if (cur.points >= 3) out.add(cur.toArray())
+                cur.clear()
+            }
+            if (cur.n == 0 || x != cur.a[cur.n - 2] || y != cur.a[cur.n - 1]) cur.add(x, y)
+            i += 3
+        }
+        if (cur.points >= 3) out.add(cur.toArray())
+        return out
     }
 
     private fun split(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): List<Stroke>? {

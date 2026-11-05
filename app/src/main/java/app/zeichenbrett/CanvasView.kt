@@ -207,6 +207,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         viewChanged()
     }
 
+    /** Ganze Seite: 0° und kleinster Zoom, mittig (z. B. beim Import), unabhängig von Sperren. */
+    fun showWholePage() {
+        val d = doc ?: return
+        d.rot = 0f
+        d.zoom = minZoom(d)
+        place(d, d.pageW / 2f, d.pageH / 2f, width / 2f, height / 2f)
+        viewChanged()
+    }
+
     fun setPlanRotation(r: Float) {
         val d = doc ?: return
         val c = toDoc(d, width / 2f, height / 2f)
@@ -917,7 +926,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean, mul: Boolean): FillAlgo.Result {
         // Auflösung: 0,25 pt je Pixel, bei großer Toleranz gröber (Toleranz ≈ 8 px).
         // Ausschnitte wachsen, zuletzt die ganze Seite (ggf. gröber).
-        val base = max(0.25f, tol / 8f)
+        // Feineres Raster bei kleiner Toleranz, damit auch schmale Lücken erkannt werden
+        val base = tol.coerceIn(0.1f, 0.25f)
         val tries = ArrayList<Pair<Float, Float>>()   // (pt je px, Seitenlänge in pt)
         for (size in intArrayOf(1024, 2048, 3072)) {
             tries.add(base to size * base)
@@ -959,11 +969,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val raw = buf.array()
             val under = ByteArray(w * h)
             for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) under[o + x] = raw[r + x] }
-            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top, if (mul) 4 else 1)
+            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top, if (mul) 2 else 1)
             val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
             val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
             // Lücken kleiner als die Toleranz schließen: Linien um je tol/2 verdicken
-            val rad = ceil(tol / 2f * ppt - 0.01f).toInt().coerceAtLeast(0)
+            val rad = (tol / 2f * ppt).roundToInt().coerceAtLeast(0)
             val eps = 0.01f
             val r = FillAlgo.compute(under, w, h, sx, sy, rad,
                 left > eps, top > eps, left + wPt < pw - eps, top + hPt < ph - eps)

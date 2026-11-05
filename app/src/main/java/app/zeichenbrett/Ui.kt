@@ -468,6 +468,8 @@ class SliderView(
     private val onRelease: () -> Unit = {},
     /** Nur die Fangpunkte selbst sind wählbar. */
     private val discrete: Boolean = false,
+    /** An den Fangpunkten einrasten. */
+    private val snaps: Boolean = true,
 ) : View(ctx) {
     private val p = Paint(Paint.ANTI_ALIAS_FLAG)
     private val pad = ctx.dp(14f)
@@ -514,7 +516,7 @@ class SliderView(
         val t = ((e.x - pad) / w).coerceIn(0f, 1f)
         var v = valAt(t)
         val tol = context.dp(10f)
-        for (i in 0..segs) if (abs(i.toFloat() / segs * w - t * w) <= tol) { v = anchors[i]; break }
+        if (snaps) for (i in 0..segs) if (abs(i.toFloat() / segs * w - t * w) <= tol) { v = anchors[i]; break }
         if (discrete) v = anchors[(t * segs).roundToInt().coerceIn(0, segs)]
         if (discrete && v == value && e.actionMasked == MotionEvent.ACTION_MOVE) return true
         value = v

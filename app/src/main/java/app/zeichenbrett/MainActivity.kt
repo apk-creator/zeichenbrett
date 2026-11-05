@@ -1038,12 +1038,13 @@ class MainActivity : Activity(), CanvasView.Host {
                 val idx = k - T_PEN0
                 // Toleranz in % (100 % = 10 pt), Fangpunkte wie beim Radierer; Vorschau in Originalgröße
                 label.text = "${tools.fillPct[idx].roundToInt()} %"
-                slider = SliderView(this, ERASER_ANCHORS, tools.fillPct[idx], { v ->
-                    tools.fillPct[idx] = v.roundToInt().toFloat().coerceIn(1f, 100f)
+                // 0–100 % = 0–0,5 pt, stufenlos ohne Fangpunkte
+                slider = SliderView(this, floatArrayOf(0f, 100f), tools.fillPct[idx], { v ->
+                    tools.fillPct[idx] = v.roundToInt().toFloat().coerceIn(0f, 100f)
                     label.text = "${tools.fillPct[idx].roundToInt()} %"
                     toolBtns[k].text = label.text
                     canvasView.showGapPreview(Pal.PENS[idx], tools.fillTol(idx) * canvasView.pxPerPt(), prevX, prevBottom)
-                }, { canvasView.hideSizePreview() })
+                }, { canvasView.hideSizePreview() }, snaps = false)
             } else {
                 val idx = k - T_PEN0
                 label.text = fmtWidth(tools.penWidth[idx]) + " pt"
@@ -1057,7 +1058,7 @@ class MainActivity : Activity(), CanvasView.Host {
             // Gleiche Abstände zwischen den Fangpunkten wie bei den Stiften (45 dp je Abschnitt)
             val segs = (when {
                 k == T_ERASER -> ERASER_ANCHORS.size
-                tools.fillMode[k - T_PEN0] -> ERASER_ANCHORS.size
+                tools.fillMode[k - T_PEN0] -> 5
                 else -> PEN_ANCHORS.size
             }) - 1
             box.addView(slider, LinearLayout.LayoutParams(dpi(45f * segs + 28f), btnSize))
@@ -1608,6 +1609,7 @@ class MainActivity : Activity(), CanvasView.Host {
                     d.items = d.items + placed
                     d.selectedImage = id
                     d.dirty = true
+                    if (canvasView.doc === d) canvasView.showWholePage()
                     canvasView.invalidate()
                     refreshUi()
                 }
