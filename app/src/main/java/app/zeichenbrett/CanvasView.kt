@@ -363,7 +363,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.drawRect(page, fillP)
         c.clipRect(page)
         // Füllungen unter dem Hintergrund
+        val sweep = if (act == PenAct.ERASE) eraseSweep else null
+        if (sweep != null) { c.save(); c.clipOutPath(sweep) }
         for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
+        if (sweep != null) c.restore()
         val hr = hires
         val hrOk = hr != null && hrDoc === d && !hr.isRecycled
         d.overview?.let {
@@ -411,7 +414,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     }
                 }
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
-                is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
+                is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) {
+                    if (sweep != null) { c.save(); c.clipOutPath(sweep) }
+                    fillP.color = it.color; c.drawPath(it.path, fillP)
+                    if (sweep != null) c.restore()
+                }
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -1104,8 +1111,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 val list = grid[key(floor(x / cell).toInt(), floor(y / cell).toInt())]
                 if (list != null) {
                     // Nächste und zweitnächste Linie (nicht parallel) innerhalb der Reichweite
-                    var bd = Float.MAX_VALUE; var bx = x; var by = y; var bux = 0f; var buy = 0f; var bax = 0f; var bay = 0f
-                    var cd = Float.MAX_VALUE; var cux = 0f; var cuy = 0f; var cax = 0f; var cay = 0f
+                    var bd = Float.MAX_VALUE; var bx = x; var by = y; var bux = 0f; var buy = 0f; var bax = 0f; var bay = 0f; var bl = 0f
+                    var cd = Float.MAX_VALUE; var cux = 0f; var cuy = 0f; var cax = 0f; var cay = 0f; var cl = 0f
                     var reach = 0f
                     for (id in list) {
                         val sg = segs[id]
@@ -1125,10 +1132,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                         val ux = if (ln > 0f) dx / ln else 0f; val uy = if (ln > 0f) dy / ln else 0f
                         if (dd < bd) {
                             // bisher beste wird zweitbeste, wenn nicht parallel
-                            if (bd < Float.MAX_VALUE && abs(bux * uy - buy * ux) > 0.05f) { cd = bd; cux = bux; cuy = buy; cax = bax; cay = bay }
-                            bd = dd; bx = qx; by = qy; bux = ux; buy = uy; bax = x0; bay = y0; reach = max(reach, lim)
-                        } else if (dd < cd && abs(bux * uy - buy * ux) > 0.05f) {
-                            cd = dd; cux = ux; cuy = uy; cax = x0; cay = y0; reach = max(reach, lim)
+                            if (bd < Float.MAX_VALUE && abs(bux * uy - buy * ux) > 0.01f) { cd = bd; cux = bux; cuy = buy; cax = bax; cay = bay; cl = bl }
+                            bd = dd; bx = qx; by = qy; bux = ux; buy = uy; bax = x0; bay = y0; bl = ln; reach = max(reach, lim)
+                        } else if (dd < cd && abs(bux * uy - buy * ux) > 0.01f) {
+                            cd = dd; cux = ux; cuy = uy; cax = x0; cay = y0; cl = ln; reach = max(reach, lim)
                         }
                     }
                     if (bd < Float.MAX_VALUE) {
@@ -1139,7 +1146,11 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                             if (abs(den) > 1e-4f) {
                                 val tt = ((cax - bax) * cuy - (cay - bay) * cux) / den
                                 val ix = bax + bux * tt; val iy = bay + buy * tt
-                                if (hypot(ix - x, iy - y) <= 2f * reach) { fx = ix; fy = iy }
+                                // Nur echte Schnittpunkte (auf beiden Segmenten); bei sehr spitzen Winkeln darf die Spitze weiter weg liegen
+                                val sc = (ix - cax) * cux + (iy - cay) * cuy
+                                val onB = tt >= -reach && tt <= bl + reach
+                                val onC = sc >= -reach && sc <= cl + reach
+                                if (onB && onC && hypot(ix - x, iy - y) <= 40f * reach) { fx = ix; fy = iy }
                             }
                         }
                         p[i] = fx; p[i + 1] = fy
@@ -1223,6 +1234,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         act = PenAct.ERASE
         eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
+        eraseSweep = Path().apply { fillType = Path.FillType.WINDING }
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
         eraseWidthPt = eraserPx() / scaleOf(d)
@@ -1230,8 +1242,12 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         applyErase(d, dx, dy, dx, dy)
     }
 
+    /** Radierspur für Füllungen: wird live nur ausgeblendet und am Ende einmal geschnitten (schnell). */
+    private var eraseSweep: Path? = null
+
     private fun applyErase(d: PageDoc, ax: Float, ay: Float, bx: Float, by: Float) {
-        Geo.erase(d.items, ax, ay, bx, by, eraseWidthPt / 2f)?.let { d.items = it }
+        Geo.erase(d.items, ax, ay, bx, by, eraseWidthPt / 2f, fills = false)?.let { d.items = it }
+        eraseSweep?.let { Geo.addCapsule(it, ax, ay, bx, by, eraseWidthPt / 2f) }
     }
 
     private fun penMove(d: PageDoc, e: MotionEvent) {
@@ -1348,6 +1364,18 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
             }
             PenAct.ERASE -> {
+                eraseSweep?.let { sw ->
+                    val sb = RectF(); sw.computeBounds(sb, true)
+                    var ch = false
+                    val ni = d.items.map { f ->
+                        if (f is Fill && RectF.intersects(f.bounds, sb)) {
+                            val r = Geo.cutFill(f, sw)
+                            if (r != null) { ch = true; r } else f
+                        } else f
+                    }
+                    if (ch) d.items = ni.filter { it !is Fill || it.polys.isNotEmpty() }
+                }
+                eraseSweep = null
                 if (eraseCover) {
                     d.items = d.items + Cover(d.bgColor, eraseWidthPt, cur.toArray())
                     d.dirty = true
@@ -1452,6 +1480,14 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     }
 
     fun refreshMeasure() { doc?.let { updateMeasure(it) } }
+
+    /** Flächenmessung: zuletzt gesetzten Punkt entfernen (öffnet ein geschlossenes Polygon wieder). */
+    fun removeLastAreaPoint() {
+        if (areaClosed) areaClosed = false
+        else if (area.n >= 2) area.n -= 2
+        doc?.let { updateMeasure(it) }
+        invalidate()
+    }
 
     fun clearMeasure() {
         measureA = null; measureB = null; measureText = null

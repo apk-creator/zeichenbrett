@@ -986,6 +986,7 @@ class MainActivity : Activity(), CanvasView.Host {
     /** Doppeltipp: Größe des Werkzeugs auf den Standardwert. */
     private fun resetSize(k: Int) {
         when {
+            k == T_MEASURE && tools.measureArea -> { canvasView.removeLastAreaPoint(); return }
             k == T_MEASURE -> {
                 val d = active ?: return
                 d.unit = d.initUnit; d.dirty = true

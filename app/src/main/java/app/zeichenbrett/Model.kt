@@ -61,7 +61,7 @@ class ToolState {
     /** Füllen: Toleranz in % (0 % = keine, 100 % = 0,5 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
     val fillPct = FloatArray(5) { DEF_FILL_PCT }
     /** 0 % = keine Toleranz, 1–100 % = 0,1–0,5 pt (feiner lässt sich nicht sinnvoll unterscheiden). */
-    fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0.001f else 0.01f + 0.49f * (fillPct[i] - 1f) / 99f
+    fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0.0001f else 0.01f + 0.49f * (fillPct[i] - 1f) / 99f
 
     companion object {
         const val DEF_PEN_WIDTH = 0.3f
