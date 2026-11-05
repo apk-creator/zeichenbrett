@@ -235,7 +235,15 @@ object PdfIO {
                             cs.setLineJoinStyle(1)
                             for (it in run) {
                                 when (it) {
-                                    is Stroke -> polyline(cs, it.pts, it.width, it.color, H)
+                                    is Stroke -> if (it.rs && it.re) polyline(cs, it.pts, it.width, it.color, H) else {
+                                        // Gerade Enden (radiert): stumpfe Linie, runde Enden als Kreise
+                                        cs.setLineCapStyle(0)
+                                        polyline(cs, it.pts, it.width, it.color, H)
+                                        cs.setLineCapStyle(1)
+                                        val p = it.pts; val n = p.size
+                                        if (it.rs) dot(cs, p[0], p[1], it.width / 2f, it.color, H)
+                                        if (it.re) dot(cs, p[n - 2], p[n - 1], it.width / 2f, it.color, H)
+                                    }
                                     is Cover -> polyline(cs, it.pts, it.width, it.color, H)
                                     is Fill -> fillPolys(cs, it.polys, it.color, H)
                                     else -> {}
@@ -293,6 +301,19 @@ object PdfIO {
             while (i + 1 < p.size) { cs.lineTo(p[i], H - p[i + 1]); i += 2 }
         }
         cs.stroke()
+    }
+
+    private fun dot(cs: PDPageContentStream, x: Float, y: Float, r: Float, c: Int, H: Float) {
+        val k = 0.5523f * r
+        val cy = H - y
+        cs.setNonStrokingColor(color(c))
+        cs.moveTo(x + r, cy)
+        cs.curveTo(x + r, cy + k, x + k, cy + r, x, cy + r)
+        cs.curveTo(x - k, cy + r, x - r, cy + k, x - r, cy)
+        cs.curveTo(x - r, cy - k, x - k, cy - r, x, cy - r)
+        cs.curveTo(x + k, cy - r, x + r, cy - k, x + r, cy)
+        cs.closePath()
+        cs.fill()
     }
 
     private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float) {

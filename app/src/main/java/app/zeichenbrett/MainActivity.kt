@@ -448,7 +448,9 @@ class MainActivity : Activity(), CanvasView.Host {
 
         // Einstellungspalette: Zurück, Vor, Zoom, Rotation, Maßstab, Import, Speichern, Schließen
         setBar.removeAllViews()
-        val wide = (btnSize * 1.6f).roundToInt()
+        // Hochformat: Einstellungsleiste schmaler, damit der Titel lesbar bleibt
+        val portraitBars = (if (root.height > 0) root.height else dm.heightPixels) > screenW
+        val wide = (btnSize * (if (portraitBars) 1.35f else 1.6f)).roundToInt()
         bUndo = Btn(this).apply { icon = "undo"; onTap = { doUndo(true) } }
         bRedo = Btn(this).apply { icon = "redo"; onTap = { doUndo(false) } }
         bZoom = Btn(this).apply {
@@ -469,8 +471,8 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         bSave = Btn(this).apply { icon = "save"; onTap = { this@MainActivity.active?.let { saveDoc(it, null) } } }
         bClose = Btn(this).apply { icon = "close"; onTap = { this@MainActivity.active?.let { closeDoc(it) } } }
-        val iconW = (btnSize * 1.1f).roundToInt()
-        val gapS = dpi(4f)
+        val iconW = (btnSize * (if (portraitBars) 0.9f else 1.1f)).roundToInt()
+        val gapS = dpi(if (portraitBars) 1f else 4f)
         val all = listOf(bUndo, bRedo, bZoom, bRot, bScale, bBg, bImport, bSave, bClose)
         for ((i, b) in all.withIndex()) {
             val w = if (b === bZoom || b === bRot || b === bScale) wide else iconW
@@ -510,8 +512,9 @@ class MainActivity : Activity(), CanvasView.Host {
                 else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
             }
             if (k >= T_PEN0 && k < T_ERASER) b.icon = if (tools.fillMode[k - T_PEN0]) "bucket" else "pen"
+            if (k == T_MEASURE) b.icon = if (tools.measureArea) "area" else "dim"
             b.text = when (k) {
-                T_MEASURE -> d?.unit?.label ?: "m"
+                T_MEASURE -> (d?.unit?.label ?: "m") + (if (tools.measureArea) "²" else "")
                 T_RULER -> fmtDeg(tools.rulerAngle)
                 T_ERASER -> "${tools.eraserPct.roundToInt()} %"
                 else -> if (tools.fillMode[k - T_PEN0]) "${tools.fillPct[k - T_PEN0].roundToInt()} %" else fmtWidth(tools.penWidth[k - T_PEN0])
@@ -942,6 +945,17 @@ class MainActivity : Activity(), CanvasView.Host {
             else -> (tools.tool == Tool.PEN || tools.tool == Tool.FILL) && tools.pen == k - T_PEN0
         }
         if (isActive && touchDismissed == k) { dismissPopup(); return }
+        if (isActive && k == T_MEASURE) {
+            // Aktives Messen: zwischen Länge und Fläche umschalten
+            dismissPopup()
+            later {
+                tools.measureArea = !tools.measureArea
+                canvasView.clearMeasure()
+                canvasView.invalidate()
+                refreshUi()
+            }
+            return
+        }
         if (isActive && k >= T_PEN0 && k < T_ERASER) {
             // Aktiver Stift: zwischen Stift und Füllen umschalten
             dismissPopup()
@@ -1053,7 +1067,7 @@ class MainActivity : Activity(), CanvasView.Host {
             val d = active ?: return
             for (u in MUnit.values()) {
                 val b = Btn(this)
-                b.text = u.label
+                b.text = u.label + (if (tools.measureArea) "²" else "")
                 b.active = d.unit == u
                 b.onTap = {
                     d.unit = u; d.dirty = true

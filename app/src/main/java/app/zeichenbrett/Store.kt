@@ -31,6 +31,8 @@ object Store {
             when (it) {
                 is Stroke -> {
                     o.put("t", "s"); o.put("c", it.color); o.put("w", it.width.toDouble()); o.put("p", ptsToString(it.pts))
+                    if (!it.rs) o.put("rs", false)
+                    if (!it.re) o.put("re", false)
                 }
                 is Cover -> {
                     o.put("t", "c"); o.put("c", it.color); o.put("w", it.width.toDouble()); o.put("p", ptsToString(it.pts))
@@ -58,7 +60,7 @@ object Store {
         for (i in 0 until a.length()) {
             val o = a.getJSONObject(i)
             when (o.optString("t")) {
-                "s" -> out.add(Stroke(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
+                "s" -> out.add(Stroke(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p")), o.optBoolean("rs", true), o.optBoolean("re", true)))
                 "c" -> out.add(Cover(o.getInt("c"), o.getDouble("w").toFloat(), ptsFromString(o.getString("p"))))
                 "f" -> {
                     val pa = o.getJSONArray("p")

@@ -397,7 +397,19 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                         c.restore()
                     } else drawImage(c, d, it)
                 }
-                is Stroke -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
+                is Stroke -> if (visible(it.bounds, it.width, vis)) {
+                    if (it.rs && it.re) drawPoly(c, it.pts, it.path, it.width, it.color, minW) else {
+                        // Gerade (radierte) Enden: stumpf zeichnen, runde Enden als Punkte
+                        val w = max(it.width, minW)
+                        strokeP.strokeCap = Paint.Cap.BUTT
+                        drawPoly(c, it.pts, it.path, it.width, it.color, minW)
+                        strokeP.strokeCap = Paint.Cap.ROUND
+                        fillP.color = it.color
+                        val p = it.pts; val n = p.size
+                        if (it.rs) c.drawCircle(p[0], p[1], w / 2f, fillP)
+                        if (it.re) c.drawCircle(p[n - 2], p[n - 1], w / 2f, fillP)
+                    }
+                }
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
                 is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
             }
@@ -420,8 +432,40 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             }
         }
 
+        // Flächenmessung
+        if (tools.tool == Tool.MEASURE && tools.measureArea && area.points >= 1) {
+            val ps = area.toArray()
+            m.mapPoints(ps)
+            val n = ps.size / 2
+            val poly = Path().apply { moveTo(ps[0], ps[1]); for (i in 1 until n) lineTo(ps[2 * i], ps[2 * i + 1]); if (areaClosed) close() }
+            if (n >= 3) {
+                val fp = Path(poly).apply { close() }
+                fillP.color = Color.argb(28, 0, 0, 0)
+                c.drawPath(fp, fillP)
+            }
+            strokeP.color = Pal.BLACK; strokeP.strokeWidth = 1.5f * dens
+            c.drawPath(poly, strokeP)
+            if (!areaClosed && n >= 3) {
+                // Schließende Kante gestrichelt
+                strokeP.pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * dens, 5f * dens), 0f)
+                c.drawLine(ps[2 * n - 2], ps[2 * n - 1], ps[0], ps[1], strokeP)
+                strokeP.pathEffect = null
+            }
+            fillP.color = Pal.BLACK
+            for (i in 0 until n) c.drawCircle(ps[2 * i], ps[2 * i + 1], 3f * dens, fillP)
+            if (!areaClosed && n >= 3) {
+                strokeP.strokeWidth = 1f * dens
+                c.drawCircle(ps[0], ps[1], 9f * dens, strokeP)
+            }
+            measureText?.let { t ->
+                var cx = 0f; var cy = 0f
+                for (i in 0 until n) { cx += ps[2 * i]; cy += ps[2 * i + 1] }
+                label(c, t, cx / n, cy / n)
+            }
+        }
+
         // Messlinie
-        if (tools.tool == Tool.MEASURE) {
+        if (tools.tool == Tool.MEASURE && !tools.measureArea) {
             val a = measureA; val b = measureB
             if (a != null && b != null) {
                 val ps = floatArrayOf(a.x, a.y, b.x, b.y)
@@ -646,7 +690,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     // ------------------------------------------------------------------ Eingabe
 
     private enum class Mode { NONE, PEN, FINGER, IGNORE }
-    private enum class PenAct { NONE, DRAW, ERASE, MEASURE, MOVE, SCALE }
+    private enum class PenAct { NONE, DRAW, ERASE, MEASURE, AREA, MOVE, SCALE }
 
     private var mode = Mode.NONE
     private var act = PenAct.NONE
@@ -882,6 +926,18 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private fun startAction(d: PageDoc, dx: Float, dy: Float, x: Float, y: Float) {
         when {
             tempEraser || tools.tool == Tool.ERASER -> startErase(d, dx, dy, x, y)
+            tools.tool == Tool.MEASURE && tools.measureArea -> {
+                // Fläche: jeder Tipp setzt eine Ecke (beim Ziehen verschiebbar); Tipp auf den ersten Punkt schließt
+                if (areaClosed) { area.clear(); areaClosed = false }
+                val n = area.points
+                if (n >= 3) {
+                    val f = floatArrayOf(area.a[0], area.a[1]); viewMatrix(d).mapPoints(f)
+                    if (hypot(f[0] - x, f[1] - y) < 14f * dens) { areaClosed = true; act = PenAct.NONE; updateMeasure(d); invalidate(); return }
+                }
+                area.add(dx, dy)
+                act = PenAct.AREA
+                updateMeasure(d)
+            }
             tools.tool == Tool.MEASURE -> {
                 act = PenAct.MEASURE
                 measureA = PointF(dx, dy); measureB = PointF(dx, dy)
@@ -1069,9 +1125,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                         val ux = if (ln > 0f) dx / ln else 0f; val uy = if (ln > 0f) dy / ln else 0f
                         if (dd < bd) {
                             // bisher beste wird zweitbeste, wenn nicht parallel
-                            if (bd < Float.MAX_VALUE && abs(bux * uy - buy * ux) > 0.26f) { cd = bd; cux = bux; cuy = buy; cax = bax; cay = bay }
+                            if (bd < Float.MAX_VALUE && abs(bux * uy - buy * ux) > 0.05f) { cd = bd; cux = bux; cuy = buy; cax = bax; cay = bay }
                             bd = dd; bx = qx; by = qy; bux = ux; buy = uy; bax = x0; bay = y0; reach = max(reach, lim)
-                        } else if (dd < cd && abs(bux * uy - buy * ux) > 0.26f) {
+                        } else if (dd < cd && abs(bux * uy - buy * ux) > 0.05f) {
                             cd = dd; cux = ux; cuy = uy; cax = x0; cay = y0; reach = max(reach, lim)
                         }
                     }
@@ -1228,6 +1284,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 cur.add(dx, dy)
             }
             PenAct.MEASURE -> { measureB?.set(dx, dy); updateMeasure(d) }
+            PenAct.AREA -> { if (area.n >= 2) { area.a[area.n - 2] = dx; area.a[area.n - 1] = dy }; updateMeasure(d) }
             PenAct.MOVE -> updateSel(d) { it.copy(x = dx - grabDX, y = dy - grabDY) }
             PenAct.SCALE -> updateSel(d) { im ->
                 // Zeiger in den gedrehten Rahmen des Elements übertragen, gegenüberliegende Ecke bleibt fest
@@ -1366,7 +1423,26 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     // ---- Messen
 
+    /** Flächenmessung: Eckpunkte in pt. */
+    private val area = FList(64)
+    private var areaClosed = false
+
     private fun updateMeasure(d: PageDoc) {
+        if (tools.measureArea) {
+            val n = area.points
+            if (n < 3) { measureText = null; host.refreshStatus(); return }
+            var s2 = 0.0
+            for (i in 0 until n) {
+                val j = (i + 1) % n
+                s2 += area.a[2 * i].toDouble() * area.a[2 * j + 1] - area.a[2 * j].toDouble() * area.a[2 * i + 1]
+            }
+            val aPt = abs(s2) / 2.0
+            val mm = d.scale / PT_PER_MM.toDouble()
+            val real = aPt * mm * mm / (d.unit.mm * d.unit.mm)
+            measureText = String.format(Locale.US, "%.2f %s²", real, d.unit.label)
+            host.refreshStatus()
+            return
+        }
         val a = measureA; val b = measureB
         if (a == null || b == null) { measureText = null; host.refreshStatus(); return }
         val lenPt = hypot(b.x - a.x, b.y - a.y)
@@ -1379,6 +1455,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
 
     fun clearMeasure() {
         measureA = null; measureB = null; measureText = null
+        area.clear(); areaClosed = false
         invalidate()
     }
 

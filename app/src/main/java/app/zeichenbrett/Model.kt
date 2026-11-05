@@ -54,16 +54,18 @@ class ToolState {
     var ignoreBackground = true
     /** Lineal: auch rechtwinklig zum Lineal zeichnen. */
     var rulerOrtho = false
+    /** Messen: Fläche statt Länge. */
+    var measureArea = false
     /** Je Stift: Füllen statt Zeichnen (bleibt beim Werkzeugwechsel erhalten). */
     val fillMode = BooleanArray(5)
     /** Füllen: Toleranz in % (0 % = keine, 100 % = 0,5 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
     val fillPct = FloatArray(5) { DEF_FILL_PCT }
     /** 0 % = keine Toleranz, 1–100 % = 0,1–0,5 pt (feiner lässt sich nicht sinnvoll unterscheiden). */
-    fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0f else 0.1f + 0.4f * fillPct[i] / 100f
+    fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0.001f else 0.01f + 0.49f * (fillPct[i] - 1f) / 99f
 
     companion object {
         const val DEF_PEN_WIDTH = 0.3f
-        const val DEF_FILL_PCT = 50f
+        const val DEF_FILL_PCT = 0f
         const val DEF_ERASER_PCT = 10f
     }
 }
@@ -71,7 +73,8 @@ class ToolState {
 sealed class Item
 
 /** Eigener Strich. Koordinaten in pt, Ursprung oben links. */
-class Stroke(val color: Int, val width: Float, val pts: FloatArray) : Item() {
+/** rs/re: Anfang/Ende rund; beim Radieren entstehen gerade abgeschnittene Enden (wie bei Füllungen). */
+class Stroke(val color: Int, val width: Float, val pts: FloatArray, val rs: Boolean = true, val re: Boolean = true) : Item() {
     val bounds: RectF = boundsOf(pts)
     val path: Path by lazy { pathOf(pts) }
 }

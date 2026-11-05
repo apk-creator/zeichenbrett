@@ -88,7 +88,7 @@ object Geo {
             if (bb.right + hw < minX || bb.left - hw > maxX || bb.bottom + hw < minY || bb.top - hw > maxY) {
                 out.add(it); continue
             }
-            val parts = split(it, ax, ay, bx, by, r + hw)
+            val parts = split(it, ax, ay, bx, by, r)
             if (parts == null) out.add(it) else { changed = true; out.addAll(parts) }
         }
         return if (changed) out else null
@@ -132,51 +132,64 @@ object Geo {
         return out
     }
 
+    /**
+     * Strich exakt am Rand der Radierkapsel (Abstand rr zur Mittellinie) schneiden.
+     * Neue Enden sind gerade (wie der Schnitt durch eine Füllung).
+     */
     private fun split(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): List<Stroke>? {
         val p = s.pts
         val n = p.size / 2
-        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr) emptyList() else null
+        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr + s.width / 2f) emptyList() else null
+        fun d(x0: Float, y0: Float, x1: Float, y1: Float, t: Float) =
+            distPtSeg(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, ax, ay, bx, by)
 
-        // Segmente in Radiernähe fein unterteilen
-        val step = max(rr * 0.4f, 0.02f)
-        val res = FList(p.size + 64)
-        res.add(p[0], p[1])
-        var anyNear = false
+        val out = ArrayList<Stroke>()
+        val run = FList(p.size + 8)
+        var runRound = s.rs          // Anfang des laufenden Teils rund?
+        var removed = false
+        if (distPtSeg(p[0], p[1], ax, ay, bx, by) > rr) run.add(p[0], p[1]) else removed = true
         for (i in 0 until n - 1) {
             val x0 = p[2 * i]; val y0 = p[2 * i + 1]
             val x1 = p[2 * i + 2]; val y1 = p[2 * i + 3]
-            val near = segSegDist(x0, y0, x1, y1, ax, ay, bx, by) <= rr
-            if (near) {
-                anyNear = true
-                val len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
-                val k = max(1, ceil(len / step).toInt())
-                for (j in 1..k) {
-                    val t = j.toFloat() / k
-                    res.add(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
-                }
-            } else {
-                res.add(x1, y1)
+            if (segSegDist(x0, y0, x1, y1, ax, ay, bx, by) > rr) {
+                if (run.n == 0) { run.add(x0, y0) }
+                run.add(x1, y1)
+                continue
             }
-        }
-        if (!anyNear) return null
-
-        val out = ArrayList<Stroke>()
-        val run = FList(res.n)
-        var removed = false
-        var i = 0
-        while (i < res.n) {
-            val x = res.a[i]; val y = res.a[i + 1]
-            if (distPtSeg(x, y, ax, ay, bx, by) > rr) {
-                run.add(x, y)
-            } else {
-                removed = true
-                if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
-                run.clear()
+            // Abstand entlang des Segments ist konvex: Minimum suchen, dann beide Ränder
+            var lo = 0f; var hi = 1f
+            repeat(40) {
+                val m1 = lo + (hi - lo) / 3f; val m2 = hi - (hi - lo) / 3f
+                if (d(x0, y0, x1, y1, m1) < d(x0, y0, x1, y1, m2)) hi = m2 else lo = m1
             }
-            i += 2
+            val tm = (lo + hi) / 2f
+            if (d(x0, y0, x1, y1, tm) > rr) {
+                if (run.n == 0) run.add(x0, y0)
+                run.add(x1, y1); continue
+            }
+            removed = true
+            // Eintritt t0 in [0, tm]
+            if (d(x0, y0, x1, y1, 0f) > rr) {
+                var a0 = 0f; var b0 = tm
+                repeat(40) { val m = (a0 + b0) / 2f; if (d(x0, y0, x1, y1, m) > rr) a0 = m else b0 = m }
+                if (run.n == 0) run.add(x0, y0)
+                run.add(x0 + (x1 - x0) * a0, y0 + (y1 - y0) * a0)
+            }
+            if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray(), runRound, false))
+            run.clear()
+            // Austritt t1 in [tm, 1]
+            if (d(x0, y0, x1, y1, 1f) > rr) {
+                var a1 = tm; var b1 = 1f
+                repeat(40) { val m = (a1 + b1) / 2f; if (d(x0, y0, x1, y1, m) > rr) b1 = m else a1 = m }
+                run.add(x0 + (x1 - x0) * b1, y0 + (y1 - y0) * b1)
+                run.add(x1, y1)
+                runRound = false
+            } else {
+                runRound = false
+            }
         }
         if (!removed) return null
-        if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
+        if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray(), runRound, s.re))
         return out
     }
 }

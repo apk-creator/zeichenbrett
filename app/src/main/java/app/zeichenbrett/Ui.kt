@@ -404,6 +404,15 @@ object Icons {
                 path.moveTo(6f, 9f); path.lineTo(12f, 15f); path.lineTo(18f, 9f)
                 c.drawPath(path, p)
             }
+            "area" -> {
+                // Fläche: Rechteck mit Schraffur
+                c.drawRect(4f, 6f, 20f, 18f, p)
+                p.strokeWidth = 1.1f
+                c.drawLine(4f, 10f, 8f, 6f, p)
+                c.drawLine(4f, 16f, 14f, 6f, p)
+                c.drawLine(8f, 18f, 20f, 6f, p)
+                c.drawLine(14f, 18f, 20f, 12f, p)
+            }
             "ortho" -> {
                 // Rechter Winkel: zwei Schenkel mit Winkelzeichen
                 path.moveTo(5f, 3.5f); path.lineTo(5f, 19f); path.lineTo(20.5f, 19f)
