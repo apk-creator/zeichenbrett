@@ -361,7 +361,7 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         toolBar = palette(this, false)
         imageBar = palette(this, true).apply { visibility = View.GONE }
-        val m = dpi(12f)
+        val m = dpi(12f) - shadowInset(this)
         stage.addView(docBar, lp(Gravity.TOP or Gravity.START, m, m, 0, 0))
         stage.addView(setBar, lp(Gravity.TOP or Gravity.END, 0, m, m, 0))
         stage.addView(toolBar, lp(Gravity.CENTER_VERTICAL or Gravity.START, m, 0, 0, 0))
@@ -569,17 +569,28 @@ class MainActivity : Activity(), CanvasView.Host {
         }
         val minW = docSlot + dpi(4f) + btnSize + box.paddingLeft + box.paddingRight
         val w = max(minW, longest + box.paddingLeft + box.paddingRight).coerceAtMost(docBar.right - dpi(12f))
-        val top = docBar.bottom + dpi(8f)
+        val top = docBar.bottom - 2 * shadowInset(this) + dpi(6f)
         var maxH = root.height - top - dpi(12f)
         if (root.height > root.width) maxH = min(maxH, rowH * 7 + box.paddingTop + box.paddingBottom)
-        val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false }
-        box.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED)
-        val p = FrameLayout.LayoutParams(w, min(box.measuredHeight, maxH)).apply {
+        // Schatten und Rundung bleiben stehen, nur der Inhalt scrollt (auf die Rundung beschnitten)
+        val ins = shadowInset(this)
+        val inner = box.paddingLeft - ins
+        box.background = null
+        box.setPadding(inner, inner, inner, inner)
+        val scroll = ScrollView(this).apply { addView(box); isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
+        val frame = FrameLayout(this).apply {
+            background = ShadowBg(this@MainActivity)
+            setPadding(ins, ins, ins, ins)
+            addView(scroll, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        scroll.post { clipRound(scroll, dp(R_PANEL)) }
+        box.measure(View.MeasureSpec.makeMeasureSpec(w - 2 * ins, View.MeasureSpec.EXACTLY), View.MeasureSpec.UNSPECIFIED)
+        val p = FrameLayout.LayoutParams(w, min(box.measuredHeight + 2 * ins, maxH)).apply {
             gravity = Gravity.TOP or Gravity.START
             leftMargin = docBar.right - w
             topMargin = top
         }
-        showPopup(scroll, p, -2, withCatcher = true)
+        showPopup(frame, p, -2, withCatcher = true)
         // Während das Menü offen ist, wird der Pfeil zum „+“
         if (docs.size < MAX_DOCS) {
             docArrow?.let { a ->
@@ -704,7 +715,7 @@ class MainActivity : Activity(), CanvasView.Host {
         val btn = toolBtns[k]
         val p = FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             gravity = Gravity.TOP or Gravity.START
-            leftMargin = toolBar.right + dpi(8f)
+            leftMargin = toolBar.right - 2 * shadowInset(this@MainActivity) + dpi(8f)
             topMargin = toolBar.top + btn.top + btn.height / 2 - (btnSize + toolBar.paddingTop * 2) / 2
         }
         box.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)

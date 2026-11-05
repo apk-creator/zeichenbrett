@@ -35,12 +35,49 @@ fun outlineBg(ctx: Context, radiusDp: Float = R_BUTTON) = GradientDrawable().app
     cornerRadius = ctx.dp(radiusDp)
 }
 
-/** Weiße Palette mit gerundeten Ecken. */
+/** Abstand für den selbst gezeichneten Schatten rund um eine Palette. */
+fun shadowInset(ctx: Context) = ctx.dpi(7f)
+
+/**
+ * Weiße, gerundete Fläche mit weichem Schatten, der exakt der Rundung folgt
+ * (sauberer als der Systemschatten in den Ecken). Die Fläche liegt um [inset] eingerückt.
+ */
+class ShadowBg(private val ctx: Context, private val color: Int = Pal.WHITE, private val radiusDp: Float = R_PANEL) : android.graphics.drawable.Drawable() {
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val inset = shadowInset(ctx).toFloat()
+
+    override fun draw(c: Canvas) {
+        val b = bounds
+        val r = ctx.dp(radiusDp)
+        val rect = RectF(b.left + inset, b.top + inset, b.right - inset, b.bottom - inset)
+        p.color = color
+        p.setShadowLayer(ctx.dp(5f), 0f, ctx.dp(1.5f), android.graphics.Color.argb(55, 0, 0, 0))
+        c.drawRoundRect(rect, r, r, p)
+        p.clearShadowLayer()
+        c.drawRoundRect(rect, r, r, p)
+    }
+
+    override fun setAlpha(alpha: Int) { p.alpha = alpha }
+    override fun setColorFilter(cf: android.graphics.ColorFilter?) { p.colorFilter = cf }
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity() = android.graphics.PixelFormat.TRANSLUCENT
+}
+
+/** Inhalt auf eine gerundete Form beschneiden (z. B. scrollende Listen). */
+fun clipRound(v: View, radiusPx: Float) {
+    v.outlineProvider = object : android.view.ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: android.graphics.Outline) {
+            outline.setRoundRect(0, 0, view.width, view.height, radiusPx)
+        }
+    }
+    v.clipToOutline = true
+}
+
+/** Weiße Palette mit gerundeten Ecken und weichem Schatten. */
 fun palette(ctx: Context, horizontal: Boolean): LinearLayout = LinearLayout(ctx).apply {
     orientation = if (horizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-    background = roundBg(ctx, Pal.WHITE)
-    elevation = ctx.dp(3f)
-    val p = ctx.dpi(4f)
+    background = ShadowBg(ctx)
+    val p = ctx.dpi(4f) + shadowInset(ctx)
     setPadding(p, p, p, p)
 }
 
