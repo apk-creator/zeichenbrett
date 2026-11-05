@@ -90,6 +90,9 @@ class Fill(val color: Int, val polys: List<FloatArray>) : Item() {
         }
     }
 
+    /** Farbige Füllungen werden multipliziert (Linien darunter bleiben sichtbar); Weiß deckt ab. */
+    val multiply: Boolean get() = !(Color.red(color) > 240 && Color.green(color) > 240 && Color.blue(color) > 240)
+
     /** Liegt (x, y) in der Fläche? */
     fun contains(x: Float, y: Float): Boolean {
         if (!bounds.contains(x, y)) return false

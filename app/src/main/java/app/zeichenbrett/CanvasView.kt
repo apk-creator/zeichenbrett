@@ -69,6 +69,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
     }
     private val fillP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val mulP = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; blendMode = android.graphics.BlendMode.MULTIPLY }
     private val bmpP = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
     private val textP = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; color = Pal.BLACK }
     private val tmpPath = Path()
@@ -378,7 +379,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
                 is Stroke -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
-                is Fill -> if (visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
+                is Fill -> if (visible(it.bounds, 0f, vis)) {
+                    val fp = if (it.multiply) mulP else fillP
+                    fp.color = it.color; c.drawPath(it.path, fp)
+                }
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -882,8 +886,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         val color = Pal.PENS[tools.pen]
         val tol = tools.fillTol(tools.pen)
         val withBg = tools.fillBackground[tools.pen]
+        val mul = Fill(color, emptyList()).multiply
         Thread {
-            val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg) } catch (e: Throwable) {
+            val res = try { computeFill(d, items, d.pageW, d.pageH, px, py, tol, withBg, mul) } catch (e: Throwable) {
                 FillAlgo.Result(null, "Füllen nicht möglich.")
             }
             post {
@@ -909,7 +914,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }.start()
     }
 
-    private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean): FillAlgo.Result {
+    private fun computeFill(d: PageDoc, items: List<Item>, pw: Float, ph: Float, px: Float, py: Float, tol: Float, withBg: Boolean, mul: Boolean): FillAlgo.Result {
         // Auflösung: 0,25 pt je Pixel, bei großer Toleranz gröber (Toleranz ≈ 8 px).
         // Ausschnitte wachsen, zuletzt die ganze Seite (ggf. gröber).
         val base = max(0.25f, tol / 8f)
@@ -954,7 +959,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val raw = buf.array()
             val under = ByteArray(w * h)
             for (y in 0 until h) { val r = y * rb; val o = y * w; for (x in 0 until w) under[o + x] = raw[r + x] }
-            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top)
+            if (withBg) backgroundBarriers(d, items, under, w, h, ppt, left, top, if (mul) 4 else 1)
             val sx = ((px - left) * ppt).toInt().coerceIn(0, w - 1)
             val sy = ((py - top) * ppt).toInt().coerceIn(0, h - 1)
             // Lücken kleiner als die Toleranz schließen: Linien um je tol/2 verdicken
@@ -1008,7 +1013,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 val x = p[i]; val y = p[i + 1]
                 val list = grid[key(floor(x / cell).toInt(), floor(y / cell).toInt())]
                 if (list != null) {
-                    var bd = Float.MAX_VALUE; var bx = x; var by = y
+                    // Nächste und zweitnächste Linie (nicht parallel) innerhalb der Reichweite
+                    var bd = Float.MAX_VALUE; var bx = x; var by = y; var bux = 0f; var buy = 0f; var bax = 0f; var bay = 0f
+                    var cd = Float.MAX_VALUE; var cux = 0f; var cuy = 0f; var cax = 0f; var cay = 0f
+                    var reach = 0f
                     for (id in list) {
                         val sg = segs[id]
                         val st = strokes[(sg shr 32).toInt()]
@@ -1021,9 +1029,31 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                         val t = if (l2 > 0f) (((x - x0) * dx + (y - y0) * dy) / l2).coerceIn(0f, 1f) else 0f
                         val qx = x0 + dx * t; val qy = y0 + dy * t
                         val dd = hypot(x - qx, y - qy)
-                        if (dd <= st.width / 2f + 1.5f * res && dd < bd) { bd = dd; bx = qx; by = qy }
+                        val lim = st.width / 2f + 1.5f * res
+                        if (dd > lim) continue
+                        val ln = sqrt(l2)
+                        val ux = if (ln > 0f) dx / ln else 0f; val uy = if (ln > 0f) dy / ln else 0f
+                        if (dd < bd) {
+                            // bisher beste wird zweitbeste, wenn nicht parallel
+                            if (bd < Float.MAX_VALUE && abs(bux * uy - buy * ux) > 0.26f) { cd = bd; cux = bux; cuy = buy; cax = bax; cay = bay }
+                            bd = dd; bx = qx; by = qy; bux = ux; buy = uy; bax = x0; bay = y0; reach = max(reach, lim)
+                        } else if (dd < cd && abs(bux * uy - buy * ux) > 0.26f) {
+                            cd = dd; cux = ux; cuy = uy; cax = x0; cay = y0; reach = max(reach, lim)
+                        }
                     }
-                    if (bd < Float.MAX_VALUE) { p[i] = bx; p[i + 1] = by }
+                    if (bd < Float.MAX_VALUE) {
+                        var fx = bx; var fy = by
+                        if (cd < Float.MAX_VALUE) {
+                            // Schnittpunkt der beiden Linien: die Ecke liegt genau im Kreuzungspunkt
+                            val den = bux * cuy - buy * cux
+                            if (abs(den) > 1e-4f) {
+                                val tt = ((cax - bax) * cuy - (cay - bay) * cux) / den
+                                val ix = bax + bux * tt; val iy = bay + buy * tt
+                                if (hypot(ix - x, iy - y) <= 2f * reach) { fx = ix; fy = iy }
+                            }
+                        }
+                        p[i] = fx; p[i + 1] = fy
+                    }
                 }
                 i += 2
             }
@@ -1034,7 +1064,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
      * Hintergrund (PDF-Seite, Importe, Abdeckungen) rastern; alles, was sich deutlich von der
      * Zeichenflächenfarbe abhebt, wird zur Grenze. Die Füllung reicht nicht darunter (Wert 1).
      */
-    private fun backgroundBarriers(d: PageDoc, items: List<Item>, under: ByteArray, w: Int, h: Int, ppt: Float, left: Float, top: Float) {
+    private fun backgroundBarriers(d: PageDoc, items: List<Item>, under: ByteArray, w: Int, h: Int, ppt: Float, left: Float, top: Float, value: Int) {
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         try {
             val m = Matrix().apply { setScale(ppt, ppt); postTranslate(-left * ppt, -top * ppt) }
@@ -1073,7 +1103,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     if (under[o + x].toInt() != 0) continue
                     val c = row[x]
                     val diff = max(abs(Color.red(c) - br), max(abs(Color.green(c) - bgg), abs(Color.blue(c) - bb)))
-                    if (diff > 32) under[o + x] = 1
+                    if (diff > 32) under[o + x] = value.toByte()
                 }
             }
         } finally {

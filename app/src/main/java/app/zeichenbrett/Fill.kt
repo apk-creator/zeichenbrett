@@ -25,17 +25,29 @@ object FillAlgo {
      * r: Verdickung der Linien in px (Toleranz).
      */
     fun compute(
-        under: ByteArray, w: Int, h: Int, sx: Int, sy: Int, r: Int,
+        under: ByteArray, w: Int, h: Int, sx: Int, sy: Int, r0: Int,
         openL: Boolean, openT: Boolean, openR: Boolean, openB: Boolean,
     ): Result {
         val n = w * h
         val line = BooleanArray(n) { under[it].toInt() != 0 }
         if (sx !in 0 until w || sy !in 0 until h) return Result(null, "Außerhalb der Zeichenfläche.")
-        val closed = if (r > 0) dilate(line, w, h, r) else line
-        if (closed[sy * w + sx]) return Result(null, "Hier ist keine freie Fläche.")
+        val start = sy * w + sx
+        if (line[start]) return Result(null, "Hier ist keine freie Fläche.")
+        var r = r0
+        var closed = if (r > 0) dilate(line, w, h, r) else line
+        var small: BooleanArray? = null
+        if (closed[start]) {
+            // Kleine Fläche, die ganz im Toleranzband liegt: vollständig von Linien umschlossen?
+            small = smallArea(line, closed, w, h, start, openL, openT, openR, openB)
+            if (small == null) {
+                // Sonst Toleranz verringern, bis der Startpunkt frei ist
+                while (r > 0 && closed[start]) { r--; closed = if (r > 0) dilate(line, w, h, r) else line }
+            }
+        }
+        val region = small ?: BooleanArray(n)
+        if (small == null) {
 
         // 2. Fluten (4er-Nachbarschaft, Scanline)
-        val region = BooleanArray(n)
         var stack = IntArray(65536)
         var sp = 0
         stack[sp++] = sy * w + sx
@@ -66,13 +78,14 @@ object FillAlgo {
             if (leak) break
         }
         if (leak) return Result(null, LEAK)
+        }
 
         // 3a. Bis an die Linien wachsen lassen (ergibt in Öffnungen die halbe Toleranz)
-        val grown = if (r > 0) dilate(region, w, h, r) else region.copyOf()
+        val grown = if (r > 0 && small == null) dilate(region, w, h, r) else region.copyOf()
         for (i in 0 until n) if (line[i]) grown[i] = false
         // 3b. Spitze Winkel: freie Reste, die vollständig im verdickten Linienband liegen und an die Fläche grenzen,
         //     gehören dazu (z. B. die Spitze eines spitzen Winkels). Reste mit Verbindung nach außen nicht.
-        if (r > 0) {
+        if (r > 0 && small == null) {
             val seen = BooleanArray(n)
             var st = IntArray(4096)
             var comp = IntArray(4096)
@@ -123,6 +136,31 @@ object FillAlgo {
         if (loops.isEmpty()) return Result(null, "Hier ist keine freie Fläche.")
         // Vereinfachen erst nach dem Einrasten auf die Linienmitten (CanvasView)
         return Result(loops.map { smooth(it) }.filter { it.size >= 6 }, null)
+    }
+
+    /** Freie Pixel um den Start, wenn sie alle im Linienband liegen und keinen offenen Rand berühren; sonst null. */
+    private fun smallArea(
+        line: BooleanArray, closed: BooleanArray, w: Int, h: Int, start: Int,
+        openL: Boolean, openT: Boolean, openR: Boolean, openB: Boolean,
+    ): BooleanArray? {
+        val out = BooleanArray(line.size)
+        var st = IntArray(1024)
+        var sp = 0
+        st[sp++] = start; out[start] = true
+        while (sp > 0) {
+            val p = st[--sp]
+            if (!closed[p]) return null
+            val x = p % w; val y = p / w
+            if ((x == 0 && openL) || (x == w - 1 && openR) || (y == 0 && openT) || (y == h - 1 && openB)) return null
+            for (k in 0 until 4) {
+                val q = when (k) { 0 -> if (x > 0) p - 1 else -1; 1 -> if (x < w - 1) p + 1 else -1; 2 -> if (y > 0) p - w else -1; else -> if (y < h - 1) p + w else -1 }
+                if (q < 0 || line[q] || out[q]) continue
+                out[q] = true
+                if (sp == st.size) st = st.copyOf(sp * 2)
+                st[sp++] = q
+            }
+        }
+        return out
     }
 
     /** Quadratische Dilatation mit Radius r (getrennt nach Zeilen und Spalten). */

@@ -256,6 +256,13 @@ object PdfIO {
 
     private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float) {
         if (polys.isEmpty()) return
+        val mul = !(Color.red(c) > 240 && Color.green(c) > 240 && Color.blue(c) > 240)
+        if (mul) {
+            cs.saveGraphicsState()
+            val gs = com.tom_roush.pdfbox.pdmodel.graphics.state.PDExtendedGraphicsState()
+            gs.setBlendMode(com.tom_roush.pdfbox.pdmodel.graphics.blend.BlendMode.MULTIPLY)
+            cs.setGraphicsStateParameters(gs)
+        }
         cs.setNonStrokingColor(color(c))
         for (p in polys) {
             if (p.size < 6) continue
@@ -265,6 +272,7 @@ object PdfIO {
             cs.closePath()
         }
         cs.fillEvenOdd()
+        if (mul) cs.restoreGraphicsState()
     }
 
     private fun drawImageItem(pd: PDDocument, cs: PDPageContentStream, im: ImageItem, H: Float, dpi: Int, keep: MutableList<PDDocument>) {
