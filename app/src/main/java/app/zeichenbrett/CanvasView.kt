@@ -363,10 +363,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.drawRect(page, fillP)
         c.clipRect(page)
         // Füllungen unter dem Hintergrund
-        val sweep = if (act == PenAct.ERASE) eraseSweep else null
-        if (sweep != null) { c.save(); c.clipOutPath(sweep) }
         for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
-        if (sweep != null) c.restore()
         val hr = hires
         val hrOk = hr != null && hrDoc === d && !hr.isRecycled
         d.overview?.let {
@@ -414,11 +411,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                     }
                 }
                 is Cover -> if (visible(it.bounds, it.width, vis)) drawPoly(c, it.pts, it.path, it.width, it.color, minW)
-                is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) {
-                    if (sweep != null) { c.save(); c.clipOutPath(sweep) }
-                    fillP.color = it.color; c.drawPath(it.path, fillP)
-                    if (sweep != null) c.restore()
-                }
+                is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
             }
         }
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
@@ -1234,7 +1227,6 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         act = PenAct.ERASE
         eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
-        eraseSweep = Path().apply { fillType = Path.FillType.WINDING }
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
         eraseWidthPt = eraserPx() / scaleOf(d)
@@ -1242,12 +1234,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         applyErase(d, dx, dy, dx, dy)
     }
 
-    /** Radierspur für Füllungen: wird live nur ausgeblendet und am Ende einmal geschnitten (schnell). */
-    private var eraseSweep: Path? = null
-
     private fun applyErase(d: PageDoc, ax: Float, ay: Float, bx: Float, by: Float) {
-        Geo.erase(d.items, ax, ay, bx, by, eraseWidthPt / 2f, fills = false)?.let { d.items = it }
-        eraseSweep?.let { Geo.addCapsule(it, ax, ay, bx, by, eraseWidthPt / 2f) }
+        Geo.erase(d.items, ax, ay, bx, by, eraseWidthPt / 2f)?.let { d.items = it }
     }
 
     private fun penMove(d: PageDoc, e: MotionEvent) {
@@ -1364,18 +1352,6 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
             }
             PenAct.ERASE -> {
-                eraseSweep?.let { sw ->
-                    val sb = RectF(); sw.computeBounds(sb, true)
-                    var ch = false
-                    val ni = d.items.map { f ->
-                        if (f is Fill && RectF.intersects(f.bounds, sb)) {
-                            val r = Geo.cutFill(f, sw)
-                            if (r != null) { ch = true; r } else f
-                        } else f
-                    }
-                    if (ch) d.items = ni.filter { it !is Fill || it.polys.isNotEmpty() }
-                }
-                eraseSweep = null
                 if (eraseCover) {
                     d.items = d.items + Cover(d.bgColor, eraseWidthPt, cur.toArray())
                     d.dirty = true

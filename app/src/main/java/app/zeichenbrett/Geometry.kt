@@ -68,13 +68,12 @@ object Geo {
      * Radiert eigene Striche entlang des Radiersegments (a→b) mit Radius r (pt).
      * Gibt null zurück, wenn sich nichts geändert hat.
      */
-    fun erase(items: List<Item>, ax: Float, ay: Float, bx: Float, by: Float, r: Float, fills: Boolean = true): List<Item>? {
+    fun erase(items: List<Item>, ax: Float, ay: Float, bx: Float, by: Float, r: Float): List<Item>? {
         val minX = min(ax, bx) - r; val maxX = max(ax, bx) + r
         val minY = min(ay, by) - r; val maxY = max(ay, by) + r
         var changed = false
         val out = ArrayList<Item>(items.size + 4)
         for (it in items) {
-            if (it is Fill && !fills) { out.add(it); continue }
             if (it is Fill) {
                 // Füllungen werden geometrisch ausgeschnitten
                 val fb = it.bounds
@@ -89,7 +88,7 @@ object Geo {
             if (bb.right + hw < minX || bb.left - hw > maxX || bb.bottom + hw < minY || bb.top - hw > maxY) {
                 out.add(it); continue
             }
-            val parts = split(it, ax, ay, bx, by, r)
+            val parts = split(it, ax, ay, bx, by, r + hw)
             if (parts == null) out.add(it) else { changed = true; out.addAll(parts) }
         }
         return if (changed) out else null
@@ -113,29 +112,9 @@ object Geo {
         return Fill(f.color, polysOf(outP), f.under)
     }
 
-    /** Radierkapsel a→b zu einem Pfad hinzufügen. */
-    fun addCapsule(path: android.graphics.Path, ax: Float, ay: Float, bx: Float, by: Float, r: Float) {
-        path.addCircle(bx, by, r, android.graphics.Path.Direction.CW)
-        val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
-        if (len > 1e-4f) {
-            val nx = -(by - ay) / len * r; val ny = (bx - ax) / len * r
-            path.moveTo(ax + nx, ay + ny); path.lineTo(bx + nx, by + ny); path.lineTo(bx - nx, by - ny); path.lineTo(ax - nx, ay - ny); path.close()
-        }
-    }
-
-    /** Ganze Radierspur auf einmal aus der Füllung schneiden; null = unverändert. */
-    fun cutFill(f: Fill, sweep: android.graphics.Path): Fill? {
-        val hit = android.graphics.Path()
-        if (!hit.op(f.path, sweep, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
-        val outP = android.graphics.Path()
-        if (!outP.op(f.path, sweep, android.graphics.Path.Op.DIFFERENCE)) return null
-        val polys = polysOf(outP, 0.05f).map { FillAlgo.simplify(it, 0.01f) }.filter { it.size >= 6 }
-        return Fill(f.color, polys, f.under)
-    }
-
     /** Konturen eines Pfads als Polygone (Kurven angenähert). */
-    fun polysOf(p: android.graphics.Path, tol: Float = 0.02f): List<FloatArray> {
-        val a = p.approximate(tol)
+    fun polysOf(p: android.graphics.Path): List<FloatArray> {
+        val a = p.approximate(0.02f)
         val out = ArrayList<FloatArray>()
         val cur = FList()
         var i = 0
@@ -153,64 +132,51 @@ object Geo {
         return out
     }
 
-    /**
-     * Strich exakt am Rand der Radierkapsel (Abstand rr zur Mittellinie) schneiden.
-     * Neue Enden sind gerade (wie der Schnitt durch eine Füllung).
-     */
     private fun split(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): List<Stroke>? {
         val p = s.pts
         val n = p.size / 2
-        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr + s.width / 2f) emptyList() else null
-        fun d(x0: Float, y0: Float, x1: Float, y1: Float, t: Float) =
-            distPtSeg(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, ax, ay, bx, by)
+        if (n == 1) return if (distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr) emptyList() else null
 
-        val out = ArrayList<Stroke>()
-        val run = FList(p.size + 8)
-        var runRound = s.rs          // Anfang des laufenden Teils rund?
-        var removed = false
-        if (distPtSeg(p[0], p[1], ax, ay, bx, by) > rr) run.add(p[0], p[1]) else removed = true
+        // Segmente in Radiernähe fein unterteilen
+        val step = max(rr * 0.4f, 0.02f)
+        val res = FList(p.size + 64)
+        res.add(p[0], p[1])
+        var anyNear = false
         for (i in 0 until n - 1) {
             val x0 = p[2 * i]; val y0 = p[2 * i + 1]
             val x1 = p[2 * i + 2]; val y1 = p[2 * i + 3]
-            if (segSegDist(x0, y0, x1, y1, ax, ay, bx, by) > rr) {
-                if (run.n == 0) { run.add(x0, y0) }
-                run.add(x1, y1)
-                continue
-            }
-            // Abstand entlang des Segments ist konvex: Minimum suchen, dann beide Ränder
-            var lo = 0f; var hi = 1f
-            repeat(40) {
-                val m1 = lo + (hi - lo) / 3f; val m2 = hi - (hi - lo) / 3f
-                if (d(x0, y0, x1, y1, m1) < d(x0, y0, x1, y1, m2)) hi = m2 else lo = m1
-            }
-            val tm = (lo + hi) / 2f
-            if (d(x0, y0, x1, y1, tm) > rr) {
-                if (run.n == 0) run.add(x0, y0)
-                run.add(x1, y1); continue
-            }
-            removed = true
-            // Eintritt t0 in [0, tm]
-            if (d(x0, y0, x1, y1, 0f) > rr) {
-                var a0 = 0f; var b0 = tm
-                repeat(40) { val m = (a0 + b0) / 2f; if (d(x0, y0, x1, y1, m) > rr) a0 = m else b0 = m }
-                if (run.n == 0) run.add(x0, y0)
-                run.add(x0 + (x1 - x0) * a0, y0 + (y1 - y0) * a0)
-            }
-            if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray(), runRound, false))
-            run.clear()
-            // Austritt t1 in [tm, 1]
-            if (d(x0, y0, x1, y1, 1f) > rr) {
-                var a1 = tm; var b1 = 1f
-                repeat(40) { val m = (a1 + b1) / 2f; if (d(x0, y0, x1, y1, m) > rr) b1 = m else a1 = m }
-                run.add(x0 + (x1 - x0) * b1, y0 + (y1 - y0) * b1)
-                run.add(x1, y1)
-                runRound = false
+            val near = segSegDist(x0, y0, x1, y1, ax, ay, bx, by) <= rr
+            if (near) {
+                anyNear = true
+                val len = sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0))
+                val k = max(1, ceil(len / step).toInt())
+                for (j in 1..k) {
+                    val t = j.toFloat() / k
+                    res.add(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)
+                }
             } else {
-                runRound = false
+                res.add(x1, y1)
             }
         }
+        if (!anyNear) return null
+
+        val out = ArrayList<Stroke>()
+        val run = FList(res.n)
+        var removed = false
+        var i = 0
+        while (i < res.n) {
+            val x = res.a[i]; val y = res.a[i + 1]
+            if (distPtSeg(x, y, ax, ay, bx, by) > rr) {
+                run.add(x, y)
+            } else {
+                removed = true
+                if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
+                run.clear()
+            }
+            i += 2
+        }
         if (!removed) return null
-        if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray(), runRound, s.re))
+        if (run.points >= 2) out.add(Stroke(s.color, s.width, run.toArray()))
         return out
     }
 }

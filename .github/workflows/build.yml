@@ -30,7 +30,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          NAME="Klemmbrett_v1.${{ github.run_number }}_beta"
+          SUFFIX=$(cat release-channel 2>/dev/null | tr -d "[:space:]"); SUFFIX=${SUFFIX:-beta}
+          NAME="Klemmbrett_v1.${{ github.run_number }}_$SUFFIX"
           cp app/build/outputs/apk/release/app-release.apk "$NAME.apk"
           gh release delete latest -y --cleanup-tag || true
           gh release create "v1.${{ github.run_number }}" "$NAME.apk" \
