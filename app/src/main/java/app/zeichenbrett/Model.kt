@@ -53,11 +53,12 @@ class ToolState {
     var eraseBackground = false
     /** Je Stift: Füllen statt Zeichnen (bleibt beim Werkzeugwechsel erhalten). */
     val fillMode = BooleanArray(5)
-    /** Füllen: Toleranz in % (100 % = 0,5 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
+    /** Füllen: Toleranz in % (0 % = keine, 100 % = 0,5 pt); Öffnungen bis zu dieser Breite gelten als geschlossen. */
     val fillPct = FloatArray(5) { DEF_FILL_PCT }
     /** Füllen (je Stift): Linien des Hintergrunds (PDF, Importe) als Grenzen berücksichtigen. */
     val fillBackground = BooleanArray(5)
-    fun fillTol(i: Int) = fillPct[i] / 200f
+    /** 0 % = keine Toleranz, 1–100 % = 0,1–0,5 pt (feiner lässt sich nicht sinnvoll unterscheiden). */
+    fun fillTol(i: Int) = if (fillPct[i] <= 0f) 0f else 0.1f + 0.4f * fillPct[i] / 100f
 
     companion object {
         const val DEF_PEN_WIDTH = 0.3f
