@@ -363,7 +363,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.drawRect(page, fillP)
         c.clipRect(page)
         // Füllungen unter dem Hintergrund
-        val sweepU = if (act == PenAct.ERASE) eraseSweep?.takeIf { !it.isEmpty } else null
+        val sweepU = hidePath()
         if (sweepU != null) { c.save(); c.clipOutPath(sweepU) }
         for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
         if (sweepU != null) c.restore()
@@ -389,7 +389,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             c.restore()
         }
         // Alle Elemente in ihrer tatsächlichen Reihenfolge; beim Radieren eigene Elemente unter der Spur ausblenden
-        val sweep = if (act == PenAct.ERASE) eraseSweep?.takeIf { !it.isEmpty } else null
+        val sweep = sweepU
         var clipped = false
         for (it in d.items) {
             val own = it is Stroke || (it is Fill && !it.under)
@@ -924,6 +924,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     // ---- Stift
 
     private fun penDown(d: PageDoc, e: MotionEvent, i: Int) {
+        // Radierung wird noch berechnet: neue Aktion erst danach
+        if (pendingJobs > 0) return
         host.onPenDown()
         penId = e.getPointerId(i)
         val x = e.getX(i); val y = e.getY(i)
@@ -1258,6 +1260,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         act = PenAct.ERASE
         eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
+        eraseItems = d.items
+        eraseExpected = d.items
         eraseSweep = Path()
         sweepParts = 0
         d.pushUndo()
@@ -1285,11 +1289,50 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         if (++sweepParts >= 8) commitSweep(d)
     }
 
+    // Schneiden im Hintergrund (ein Thread, der Reihe nach); die Oberfläche bleibt flüssig.
+    private val eraseExec = java.util.concurrent.Executors.newSingleThreadExecutor()
+    @Volatile private var eraseItems: List<Item> = emptyList()
+    private val pendingChunks = ArrayList<Path>()
+    private var pendingJobs = 0
+    private var eraseExpected: List<Item>? = null
+
+    /** Noch nicht geschnittene Spurstücke (werden ausgeblendet). */
+    private fun hidePath(): Path? {
+        val cur = eraseSweep?.takeIf { act == PenAct.ERASE && !it.isEmpty }
+        if (cur == null && pendingChunks.isEmpty()) return null
+        val p = Path()
+        cur?.let { p.addPath(it) }
+        for (c in pendingChunks) p.addPath(c)
+        return p
+    }
+
     private fun commitSweep(d: PageDoc) {
         val sw = eraseSweep ?: return
-        if (!sw.isEmpty) Geo.cutWithSweep(d.items, sw)?.let { d.items = it }
+        if (!sw.isEmpty) {
+            val chunk = Path(sw)
+            pendingChunks.add(chunk)
+            pendingJobs++
+            eraseExec.execute {
+                val res = try { Geo.cutWithSweep(eraseItems, chunk) } catch (t: Throwable) { null }
+                if (res != null) eraseItems = res
+                val snap = eraseItems
+                post {
+                    pendingJobs--
+                    pendingChunks.remove(chunk)
+                    // Nur übernehmen, wenn inzwischen nichts anderes geändert wurde
+                    if (d.items === eraseExpected && snap !== d.items) { d.items = snap; eraseExpected = snap }
+                    invalidate()
+                }
+            }
+        }
         sw.reset()
         sweepParts = 0
+    }
+
+    /** Nach dem letzten Stück: Abschluss auf dem Hauptthread (Reihenfolge bleibt erhalten). */
+    private fun afterErase(f: () -> Unit) {
+        pendingJobs++
+        eraseExec.execute { post { pendingJobs--; f() } }
     }
 
     private fun penMove(d: PageDoc, e: MotionEvent) {
@@ -1408,15 +1451,22 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             PenAct.ERASE -> {
                 commitSweep(d)
                 eraseSweep = null
-                if (eraseCover) {
-                    d.items = d.items + Cover(d.bgColor, eraseWidthPt, cur.toArray())
-                    d.dirty = true
-                } else if (d.items === itemsBeforeErase) {
-                    d.dropUndo()
-                } else d.dirty = true
+                val coverPts = if (eraseCover) cur.toArray() else null
+                val w = eraseWidthPt
+                val before = itemsBeforeErase
                 itemsBeforeErase = null
                 eraserSX = -1f
-                host.onDocEdited()
+                afterErase {
+                    if (coverPts != null) {
+                        d.items = d.items + Cover(d.bgColor, w, coverPts)
+                        d.dirty = true
+                    } else if (d.items === before) {
+                        d.dropUndo()
+                    } else d.dirty = true
+                    eraseExpected = null
+                    host.onDocEdited()
+                    invalidate()
+                }
             }
             PenAct.MOVE, PenAct.SCALE -> {
                 d.dirty = true

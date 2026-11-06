@@ -91,9 +91,8 @@ object Geo {
             strokeJoin = android.graphics.Paint.Join.ROUND
         }
         paint.getFillPath(s.path, dst)
-        // Überlappungen auflösen (einfache Konturen)
-        val simple = android.graphics.Path()
-        return if (simple.op(dst, android.graphics.Path(), android.graphics.Path.Op.UNION)) simple else dst
+        dst.fillType = android.graphics.Path.FillType.WINDING
+        return dst
     }
 
     /** Radierkapsel als Vieleck, so fein unterteilt, dass die Bögen rund wirken (Abweichung ≤ 0,01 pt). */
