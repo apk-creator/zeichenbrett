@@ -89,17 +89,51 @@ object Geo {
             if (bb.right + hw < minX || bb.left - hw > maxX || bb.bottom + hw < minY || bb.top - hw > maxY) {
                 out.add(it); continue
             }
-            val parts = split(it, ax, ay, bx, by, r)
-            if (parts == null) out.add(it) else { changed = true; out.addAll(parts) }
+            // Getroffene Linie wird zur gefüllten Kontur (gleichmäßige Breite) und wie eine Füllung
+            // geschnitten: Schnittkanten folgen exakt der Radiererform.
+            if (!touches(it, ax, ay, bx, by, r + hw)) { out.add(it); continue }
+            val res = eraseFill(Fill(it.color, polysOf(strokeOutline(it))), ax, ay, bx, by, r)
+            if (res == null) out.add(it) else { changed = true; if (res.polys.isNotEmpty()) out.add(res) }
         }
         return if (changed) out else null
     }
 
-    /** Radierkapsel als Vieleck (nur gerade Kanten: schnell und ohne Punktzuwachs). */
+    private fun touches(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): Boolean {
+        val p = s.pts
+        if (p.size == 2) return distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr
+        var i = 0
+        while (i + 3 < p.size) {
+            if (segSegDist(p[i], p[i + 1], p[i + 2], p[i + 3], ax, ay, bx, by) <= rr) return true
+            i += 2
+        }
+        return false
+    }
+
+    /** Umriss eines Strichs (runde Enden und Ecken) als Fläche. */
+    fun strokeOutline(s: Stroke): android.graphics.Path {
+        val dst = android.graphics.Path()
+        val p = s.pts
+        if (p.size == 2) {
+            dst.addCircle(p[0], p[1], s.width / 2f, android.graphics.Path.Direction.CW)
+            return dst
+        }
+        val paint = android.graphics.Paint().apply {
+            style = android.graphics.Paint.Style.STROKE
+            strokeWidth = s.width
+            strokeCap = if (s.rs && s.re) android.graphics.Paint.Cap.ROUND else android.graphics.Paint.Cap.BUTT
+            strokeJoin = android.graphics.Paint.Join.ROUND
+        }
+        paint.getFillPath(s.path, dst)
+        // Überlappungen auflösen (einfache Konturen)
+        val simple = android.graphics.Path()
+        return if (simple.op(dst, android.graphics.Path(), android.graphics.Path.Op.UNION)) simple else dst
+    }
+
+    /** Radierkapsel als Vieleck, so fein unterteilt, dass die Bögen rund wirken (Abweichung ≤ 0,01 pt). */
     private fun capsulePath(ax: Float, ay: Float, bx: Float, by: Float, r: Float): android.graphics.Path {
         val path = android.graphics.Path()
         val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
-        val seg = 12
+        val seg = (Math.PI / kotlin.math.acos((1.0 - 0.01 / max(r, 0.02f)).coerceIn(-1.0, 1.0)).coerceAtLeast(1e-3)).toInt().coerceIn(8, 90)
         if (len < 1e-4f) {
             for (k in 0 until 2 * seg) {
                 val t = Math.PI * k / seg
@@ -132,7 +166,7 @@ object Geo {
         val outP = android.graphics.Path()
         if (!outP.op(f.path, cap, android.graphics.Path.Op.DIFFERENCE)) return null
         // Vereinfachen, winzige Reste verwerfen: die Punktzahl bleibt klein
-        val polys = polysOf(outP).map { FillAlgo.simplify(it, 0.01f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
+        val polys = polysOf(outP).map { FillAlgo.simplify(it, 0.005f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
         return Fill(f.color, polys, f.under)
     }
 

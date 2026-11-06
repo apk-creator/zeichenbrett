@@ -957,6 +957,20 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private fun fillAt(d: PageDoc, px: Float, py: Float) {
         if (filling) return
         if (px < 0f || py < 0f || px > d.pageW || py > d.pageH) return
+        // Tipp in eine vorhandene Füllung: nur umfärben
+        val hitIdx = d.items.indexOfLast { it is Fill && it.contains(px, py) }
+        if (hitIdx >= 0) {
+            val old = d.items[hitIdx] as Fill
+            val col = Pal.PENS[tools.pen]
+            if (old.color != col) {
+                d.pushUndo()
+                d.items = d.items.toMutableList().also { it[hitIdx] = Fill(col, old.polys, old.under) }
+                d.dirty = true
+                host.onDocEdited()
+                invalidate()
+            }
+            return
+        }
         filling = true
         val items = d.items
         val color = Pal.PENS[tools.pen]
@@ -978,7 +992,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 var pos = cur.size
                 for (i in lastImg + 1 until cur.size) {
                     val it = cur[i]
-                    if (it is Stroke && RectF.intersects(it.bounds, f.bounds)) { pos = i; break }
+                    if ((it is Stroke && RectF.intersects(it.bounds, f.bounds)) || (it is Fill && !it.under && RectF.intersects(it.bounds, f.bounds))) { pos = i; break }
                 }
                 d.pushUndo()
                 d.items = cur.subList(0, pos) + f + cur.subList(pos, cur.size)
@@ -1018,6 +1032,12 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val src = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
             val sp = Paint().apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND; xfermode = src }
             val fp = Paint().apply { style = Paint.Style.FILL; xfermode = src }
+            // Vorhandene Füllungen (auch radierte Linien) sind Grenzen; die neue Füllung reicht 2 px darunter
+            for (it in items) {
+                if (it !is Fill || !RectF.intersects(it.bounds, win)) continue
+                fp.color = Color.argb(3, 0, 0, 0)
+                cv.drawPath(it.path, fp)
+            }
             for (it in strokes) {
                 if (!visible(it.bounds, it.width, win)) continue
                 val sw = max(it.width, res)
