@@ -364,7 +364,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.clipRect(page)
         // Füllungen unter dem Hintergrund
         val sweepU = hidePath()
-        if (sweepU != null) { c.save(); c.clipOutPath(sweepU) }
+        if (sweepU != null) { c.save(); clipOutAll(c, sweepU) }
         for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
         if (sweepU != null) c.restore()
         val hr = hires
@@ -394,7 +394,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         for (it in d.items) {
             val own = it is Stroke || (it is Fill && !it.under)
             if (sweep != null && own != clipped) {
-                if (own) { c.save(); c.clipOutPath(sweep) } else c.restore()
+                if (own) { c.save(); clipOutAll(c, sweep) } else c.restore()
                 clipped = own
             }
             when (it) {
@@ -1264,6 +1264,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         eraseExpected = d.items
         eraseSweep = Path()
         sweepParts = 0
+        sweepSegs.clear()
+        sweepLen = 0f
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
         eraseWidthPt = eraserPx() / scaleOf(d)
@@ -1286,8 +1288,13 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val u = Path()
             if (u.op(sw, cap, Path.Op.UNION)) sw.set(u) else sw.addPath(cap)
         }
-        if (++sweepParts >= 8) commitSweep(d)
+        sweepSegs.add(ax, ay); sweepSegs.add(bx, by)
+        sweepLen += hypot(bx - ax, by - ay)
+        // Stück abschließen, wenn der Radierer etwa drei Radien weit gewandert ist (weniger, größere Schnitte)
+        if (sweepLen >= 3f * eraseWidthPt || ++sweepParts >= 60) commitSweep(d)
     }
+    private val sweepSegs = FList(256)
+    private var sweepLen = 0f
 
     // Schneiden im Hintergrund (ein Thread, der Reihe nach); die Oberfläche bleibt flüssig.
     private val eraseExec = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -1297,23 +1304,28 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
     private var eraseExpected: List<Item>? = null
 
     /** Noch nicht geschnittene Spurstücke (werden ausgeblendet). */
-    private fun hidePath(): Path? {
+    private fun hidePath(): List<Path>? {
         val cur = eraseSweep?.takeIf { act == PenAct.ERASE && !it.isEmpty }
         if (cur == null && pendingChunks.isEmpty()) return null
-        val p = Path()
-        cur?.let { p.addPath(it) }
-        for (c in pendingChunks) p.addPath(c)
-        return p
+        val l = ArrayList<Path>(pendingChunks)
+        cur?.let { l.add(it) }
+        return l
     }
+
+    /** Mehrere Spurstücke einzeln ausschneiden (ein gemeinsamer Pfad würde sich an Überlappungen aufheben). */
+    private fun clipOutAll(c: Canvas, l: List<Path>) { for (p in l) c.clipOutPath(p) }
 
     private fun commitSweep(d: PageDoc) {
         val sw = eraseSweep ?: return
         if (!sw.isEmpty) {
             val chunk = Path(sw)
+            val segs = sweepSegs.toArray()
+            val r = eraseWidthPt / 2f
             pendingChunks.add(chunk)
             pendingJobs++
             eraseExec.execute {
-                val res = try { Geo.cutWithSweep(eraseItems, chunk) } catch (t: Throwable) { null }
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                val res = try { Geo.cutWithSweep(eraseItems, chunk, segs, r) } catch (t: Throwable) { null }
                 if (res != null) eraseItems = res
                 val snap = eraseItems
                 post {
@@ -1327,6 +1339,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         }
         sw.reset()
         sweepParts = 0
+        sweepSegs.clear()
+        sweepLen = 0f
     }
 
     /** Nach dem letzten Stück: Abschluss auf dem Hauptthread (Reihenfolge bleibt erhalten). */

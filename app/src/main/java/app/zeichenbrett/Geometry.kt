@@ -127,7 +127,11 @@ object Geo {
      * Getroffene Striche werden zur Umrissfläche (gleichmäßige Breite) und wie Füllungen geschnitten.
      * Ergebnisflächen gelten mit der Gerade-ungerade-Regel (so liefert sie Path.op).
      */
-    fun cutWithSweep(items: List<Item>, sweep: android.graphics.Path): List<Item>? {
+    /**
+     * segs: Mittellinien der Radierkapseln (x0,y0,x1,y1,…), r: Radius – für einen genauen, schnellen Vortest,
+     * damit nur wirklich getroffene Elemente geschnitten werden (nur eine Pfadoperation je Element).
+     */
+    fun cutWithSweep(items: List<Item>, sweep: android.graphics.Path, segs: FloatArray, r: Float): List<Item>? {
         val sb = android.graphics.RectF(); sweep.computeBounds(sb, true)
         var changed = false
         val out = ArrayList<Item>(items.size + 4)
@@ -136,19 +140,17 @@ object Geo {
             val color: Int; val under: Boolean
             when (it) {
                 is Fill -> {
-                    if (!android.graphics.RectF.intersects(it.bounds, sb)) { out.add(it); continue }
+                    if (!android.graphics.RectF.intersects(it.bounds, sb) || !fillHit(it, sb, segs, r)) { out.add(it); continue }
                     src = it.path; color = it.color; under = it.under
                 }
                 is Stroke -> {
                     val hw = it.width / 2f
                     val bb = android.graphics.RectF(it.bounds); bb.inset(-hw, -hw)
-                    if (!android.graphics.RectF.intersects(bb, sb) || !nearRect(it, sb, hw)) { out.add(it); continue }
+                    if (!android.graphics.RectF.intersects(bb, sb) || !nearRect(it, sb, hw) || !strokeHit(it, sb, segs, r + hw)) { out.add(it); continue }
                     src = strokeOutline(it); color = it.color; under = false
                 }
                 else -> { out.add(it); continue }
             }
-            val hit = android.graphics.Path()
-            if (!hit.op(src, sweep, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) { out.add(it); continue }
             val rest = android.graphics.Path()
             if (!rest.op(src, sweep, android.graphics.Path.Op.DIFFERENCE)) { out.add(it); continue }
             val polys = polysOf(rest).map { FillAlgo.simplify(it, 0.005f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
@@ -156,6 +158,49 @@ object Geo {
             if (polys.isNotEmpty()) out.add(Fill(color, polys, under, evenOdd = true))
         }
         return if (changed) out else null
+    }
+
+    /** Liegt ein Strichsegment näher als rr an einer Radiermittellinie? */
+    private fun strokeHit(s: Stroke, sb: android.graphics.RectF, segs: FloatArray, rr: Float): Boolean {
+        val p = s.pts
+        val l = sb.left - rr; val t = sb.top - rr; val ri = sb.right + rr; val b = sb.bottom + rr
+        if (p.size == 2) {
+            var k = 0
+            while (k + 3 < segs.size) { if (distPtSeg(p[0], p[1], segs[k], segs[k + 1], segs[k + 2], segs[k + 3]) <= rr) return true; k += 4 }
+            return false
+        }
+        var i = 0
+        while (i + 3 < p.size) {
+            val x0 = p[i]; val y0 = p[i + 1]; val x1 = p[i + 2]; val y1 = p[i + 3]
+            i += 2
+            if (max(x0, x1) < l || min(x0, x1) > ri || max(y0, y1) < t || min(y0, y1) > b) continue
+            var k = 0
+            while (k + 3 < segs.size) {
+                if (segSegDist(x0, y0, x1, y1, segs[k], segs[k + 1], segs[k + 2], segs[k + 3]) <= rr) return true
+                k += 4
+            }
+        }
+        return false
+    }
+
+    /** Wird die Füllung getroffen? Kante in Reichweite oder Radierer liegt innen. */
+    private fun fillHit(f: Fill, sb: android.graphics.RectF, segs: FloatArray, r: Float): Boolean {
+        if (segs.size >= 2 && f.contains(segs[0], segs[1])) return true
+        val l = sb.left; val t = sb.top; val ri = sb.right; val b = sb.bottom
+        for (p in f.polys) {
+            val n = p.size / 2
+            for (i in 0 until n) {
+                val j = (i + 1) % n
+                val x0 = p[2 * i]; val y0 = p[2 * i + 1]; val x1 = p[2 * j]; val y1 = p[2 * j + 1]
+                if (max(x0, x1) < l || min(x0, x1) > ri || max(y0, y1) < t || min(y0, y1) > b) continue
+                var k = 0
+                while (k + 3 < segs.size) {
+                    if (segSegDist(x0, y0, x1, y1, segs[k], segs[k + 1], segs[k + 2], segs[k + 3]) <= r) return true
+                    k += 4
+                }
+            }
+        }
+        return false
     }
 
     /** Berührt ein Segment des Strichs das (um hw erweiterte) Rechteck? Schneller Vortest. */
