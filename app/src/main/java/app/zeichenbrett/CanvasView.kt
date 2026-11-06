@@ -1259,6 +1259,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
         eraseSweep = Path()
+        sweepParts = 0
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
         eraseWidthPt = eraserPx() / scaleOf(d)
@@ -1271,7 +1272,9 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
      * geschnitten wird einmal beim Abheben – flüssig auch bei vielen oder langen Elementen.
      */
     private var eraseSweep: Path? = null
+    private var sweepParts = 0
 
+    /** Spur stückweise: nach einigen Bewegungen wird das Stück geschnitten und ein neues begonnen. */
     private fun applyErase(d: PageDoc, ax: Float, ay: Float, bx: Float, by: Float) {
         val sw = eraseSweep ?: return
         val cap = Geo.capsulePath(ax, ay, bx, by, eraseWidthPt / 2f)
@@ -1279,6 +1282,14 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val u = Path()
             if (u.op(sw, cap, Path.Op.UNION)) sw.set(u) else sw.addPath(cap)
         }
+        if (++sweepParts >= 8) commitSweep(d)
+    }
+
+    private fun commitSweep(d: PageDoc) {
+        val sw = eraseSweep ?: return
+        if (!sw.isEmpty) Geo.cutWithSweep(d.items, sw)?.let { d.items = it }
+        sw.reset()
+        sweepParts = 0
     }
 
     private fun penMove(d: PageDoc, e: MotionEvent) {
@@ -1395,7 +1406,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
             }
             PenAct.ERASE -> {
-                eraseSweep?.let { sw -> if (!sw.isEmpty) Geo.cutWithSweep(d.items, sw)?.let { d.items = it } }
+                commitSweep(d)
                 eraseSweep = null
                 if (eraseCover) {
                     d.items = d.items + Cover(d.bgColor, eraseWidthPt, cur.toArray())

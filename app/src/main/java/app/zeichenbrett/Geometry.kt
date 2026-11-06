@@ -143,7 +143,7 @@ object Geo {
                 is Stroke -> {
                     val hw = it.width / 2f
                     val bb = android.graphics.RectF(it.bounds); bb.inset(-hw, -hw)
-                    if (!android.graphics.RectF.intersects(bb, sb)) { out.add(it); continue }
+                    if (!android.graphics.RectF.intersects(bb, sb) || !nearRect(it, sb, hw)) { out.add(it); continue }
                     src = strokeOutline(it); color = it.color; under = false
                 }
                 else -> { out.add(it); continue }
@@ -157,6 +157,33 @@ object Geo {
             if (polys.isNotEmpty()) out.add(Fill(color, polys, under, evenOdd = true))
         }
         return if (changed) out else null
+    }
+
+    /** Berührt ein Segment des Strichs das (um hw erweiterte) Rechteck? Schneller Vortest. */
+    private fun nearRect(s: Stroke, r: android.graphics.RectF, hw: Float): Boolean {
+        val l = r.left - hw; val t = r.top - hw; val rr = r.right + hw; val b = r.bottom + hw
+        val p = s.pts
+        if (p.size == 2) return p[0] in l..rr && p[1] in t..b
+        var i = 0
+        while (i + 3 < p.size) {
+            val x0 = p[i]; val y0 = p[i + 1]; val x1 = p[i + 2]; val y1 = p[i + 3]
+            i += 2
+            if (max(x0, x1) < l || min(x0, x1) > rr || max(y0, y1) < t || min(y0, y1) > b) continue
+            // Liang-Barsky
+            var t0 = 0f; var t1 = 1f
+            val dx = x1 - x0; val dy = y1 - y0
+            var ok = true
+            for ((pp, q) in arrayOf(-dx to x0 - l, dx to rr - x0, -dy to y0 - t, dy to b - y0)) {
+                if (pp == 0f) { if (q < 0f) { ok = false; break } }
+                else {
+                    val u = q / pp
+                    if (pp < 0f) { if (u > t1) { ok = false; break }; if (u > t0) t0 = u }
+                    else { if (u < t0) { ok = false; break }; if (u < t1) t1 = u }
+                }
+            }
+            if (ok) return true
+        }
+        return false
     }
 
     private fun area(p: FloatArray): Float {
