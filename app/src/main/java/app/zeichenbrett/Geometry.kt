@@ -65,39 +65,6 @@ object Geo {
         )
     }
 
-    /**
-     * Radiert eigene Striche entlang des Radiersegments (a→b) mit Radius r (pt).
-     * Gibt null zurück, wenn sich nichts geändert hat.
-     */
-    fun erase(items: List<Item>, ax: Float, ay: Float, bx: Float, by: Float, r: Float): List<Item>? {
-        val minX = min(ax, bx) - r; val maxX = max(ax, bx) + r
-        val minY = min(ay, by) - r; val maxY = max(ay, by) + r
-        var changed = false
-        val out = ArrayList<Item>(items.size + 4)
-        for (it in items) {
-            if (it is Fill) {
-                // Füllungen werden geometrisch ausgeschnitten
-                val fb = it.bounds
-                if (fb.right < minX || fb.left > maxX || fb.bottom < minY || fb.top > maxY) { out.add(it); continue }
-                val res = eraseFill(it, ax, ay, bx, by, r)
-                if (res == null) out.add(it) else { changed = true; if (res.polys.isNotEmpty()) out.add(res) }
-                continue
-            }
-            if (it !is Stroke) { out.add(it); continue }
-            val hw = it.width / 2f
-            val bb = it.bounds
-            if (bb.right + hw < minX || bb.left - hw > maxX || bb.bottom + hw < minY || bb.top - hw > maxY) {
-                out.add(it); continue
-            }
-            // Getroffene Linie wird zur gefüllten Kontur (gleichmäßige Breite) und wie eine Füllung
-            // geschnitten: Schnittkanten folgen exakt der Radiererform.
-            if (!touches(it, ax, ay, bx, by, r + hw)) { out.add(it); continue }
-            val res = eraseFill(Fill(it.color, polysOf(strokeOutline(it))), ax, ay, bx, by, r)
-            if (res == null) out.add(it) else { changed = true; if (res.polys.isNotEmpty()) out.add(res) }
-        }
-        return if (changed) out else null
-    }
-
     private fun touches(s: Stroke, ax: Float, ay: Float, bx: Float, by: Float, rr: Float): Boolean {
         val p = s.pts
         if (p.size == 2) return distPtSeg(p[0], p[1], ax, ay, bx, by) <= rr
@@ -130,7 +97,7 @@ object Geo {
     }
 
     /** Radierkapsel als Vieleck, so fein unterteilt, dass die Bögen rund wirken (Abweichung ≤ 0,01 pt). */
-    private fun capsulePath(ax: Float, ay: Float, bx: Float, by: Float, r: Float): android.graphics.Path {
+    fun capsulePath(ax: Float, ay: Float, bx: Float, by: Float, r: Float): android.graphics.Path {
         val path = android.graphics.Path()
         val len = sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay))
         val seg = (Math.PI / kotlin.math.acos((1.0 - 0.01 / max(r, 0.02f)).coerceIn(-1.0, 1.0)).coerceAtLeast(1e-3)).toInt().coerceIn(8, 90)
@@ -142,7 +109,6 @@ object Geo {
             }
         } else {
             val base = kotlin.math.atan2((by - ay).toDouble(), (bx - ax).toDouble())
-            // Halbkreis um b (vorne), dann Halbkreis um a (hinten)
             for (k in 0..seg) {
                 val t = base - Math.PI / 2 + Math.PI * k / seg
                 val x = (bx + r * cos(t)).toFloat(); val y = (by + r * sin(t)).toFloat()
@@ -157,17 +123,40 @@ object Geo {
         return path
     }
 
-    /** Radierkapsel aus der Füllung ausschneiden; null = unverändert. */
-    private fun eraseFill(f: Fill, ax: Float, ay: Float, bx: Float, by: Float, r: Float): Fill? {
-        // Schnelltest: berührt die Kapsel überhaupt eine Kante oder liegt sie innen?
-        val cap = capsulePath(ax, ay, bx, by, r)
-        val hit = android.graphics.Path()
-        if (!hit.op(f.path, cap, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) return null
-        val outP = android.graphics.Path()
-        if (!outP.op(f.path, cap, android.graphics.Path.Op.DIFFERENCE)) return null
-        // Vereinfachen, winzige Reste verwerfen: die Punktzahl bleibt klein
-        val polys = polysOf(outP).map { FillAlgo.simplify(it, 0.005f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
-        return Fill(f.color, polys, f.under)
+    /**
+     * Radierspur (Fläche in pt) aus eigenen Strichen und Füllungen schneiden – einmal am Ende des Radierens.
+     * Getroffene Striche werden zur Umrissfläche (gleichmäßige Breite) und wie Füllungen geschnitten.
+     * Ergebnisflächen gelten mit der Gerade-ungerade-Regel (so liefert sie Path.op).
+     */
+    fun cutWithSweep(items: List<Item>, sweep: android.graphics.Path): List<Item>? {
+        val sb = android.graphics.RectF(); sweep.computeBounds(sb, true)
+        var changed = false
+        val out = ArrayList<Item>(items.size + 4)
+        for (it in items) {
+            val src: android.graphics.Path
+            val color: Int; val under: Boolean
+            when (it) {
+                is Fill -> {
+                    if (!android.graphics.RectF.intersects(it.bounds, sb)) { out.add(it); continue }
+                    src = it.path; color = it.color; under = it.under
+                }
+                is Stroke -> {
+                    val hw = it.width / 2f
+                    val bb = android.graphics.RectF(it.bounds); bb.inset(-hw, -hw)
+                    if (!android.graphics.RectF.intersects(bb, sb)) { out.add(it); continue }
+                    src = strokeOutline(it); color = it.color; under = false
+                }
+                else -> { out.add(it); continue }
+            }
+            val hit = android.graphics.Path()
+            if (!hit.op(src, sweep, android.graphics.Path.Op.INTERSECT) || hit.isEmpty) { out.add(it); continue }
+            val rest = android.graphics.Path()
+            if (!rest.op(src, sweep, android.graphics.Path.Op.DIFFERENCE)) { out.add(it); continue }
+            val polys = polysOf(rest).map { FillAlgo.simplify(it, 0.005f) }.filter { it.size >= 6 && abs(area(it)) > 0.05f }
+            changed = true
+            if (polys.isNotEmpty()) out.add(Fill(color, polys, under, evenOdd = true))
+        }
+        return if (changed) out else null
     }
 
     private fun area(p: FloatArray): Float {
@@ -177,23 +166,27 @@ object Geo {
         return a / 2f
     }
 
-    /** Konturen eines Pfads als Polygone (Kurven angenähert). */
+    /** Konturen eines Pfads als Polygone: jede Kontur einzeln (keine Verwechslung beim Übergang). */
     fun polysOf(p: android.graphics.Path): List<FloatArray> {
-        val a = p.approximate(0.02f)
         val out = ArrayList<FloatArray>()
-        val cur = FList()
-        var i = 0
-        while (i + 2 < a.size) {
-            val fr = a[i]; val x = a[i + 1]; val y = a[i + 2]
-            // Sprung zur nächsten Kontur: zwei Punkte mit gleichem Anteil
-            if (i > 0 && fr == a[i - 3] && cur.n > 0 && (x != a[i - 2] || y != a[i - 1])) {
-                if (cur.points >= 3) out.add(cur.toArray())
-                cur.clear()
+        val pm = android.graphics.PathMeasure(p, false)
+        do {
+            val len = pm.length
+            if (len <= 0f) continue
+            val one = android.graphics.Path()
+            if (!pm.getSegment(0f, len, one, true)) continue
+            val a = one.approximate(0.02f)
+            val cur = FList()
+            var i = 0
+            while (i + 2 < a.size) {
+                val x = a[i + 1]; val y = a[i + 2]
+                if (cur.n == 0 || x != cur.a[cur.n - 2] || y != cur.a[cur.n - 1]) cur.add(x, y)
+                i += 3
             }
-            if (cur.n == 0 || x != cur.a[cur.n - 2] || y != cur.a[cur.n - 1]) cur.add(x, y)
-            i += 3
-        }
-        if (cur.points >= 3) out.add(cur.toArray())
+            // Schlusspunkt = Anfangspunkt nicht doppelt
+            if (cur.points >= 2 && cur.a[0] == cur.a[cur.n - 2] && cur.a[1] == cur.a[cur.n - 1]) cur.n -= 2
+            if (cur.points >= 3) out.add(cur.toArray())
+        } while (pm.nextContour())
         return out
     }
 

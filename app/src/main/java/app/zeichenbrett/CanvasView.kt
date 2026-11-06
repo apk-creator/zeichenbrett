@@ -363,7 +363,10 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         c.drawRect(page, fillP)
         c.clipRect(page)
         // Füllungen unter dem Hintergrund
+        val sweepU = if (act == PenAct.ERASE) eraseSweep?.takeIf { !it.isEmpty } else null
+        if (sweepU != null) { c.save(); c.clipOutPath(sweepU) }
         for (it in d.items) if (it is Fill && it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
+        if (sweepU != null) c.restore()
         val hr = hires
         val hrOk = hr != null && hrDoc === d && !hr.isRecycled
         d.overview?.let {
@@ -385,8 +388,15 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             c.drawBitmap(hr!!, 0f, 0f, bmpP)
             c.restore()
         }
-        // Alle Elemente in ihrer tatsächlichen Reihenfolge
+        // Alle Elemente in ihrer tatsächlichen Reihenfolge; beim Radieren eigene Elemente unter der Spur ausblenden
+        val sweep = if (act == PenAct.ERASE) eraseSweep?.takeIf { !it.isEmpty } else null
+        var clipped = false
         for (it in d.items) {
+            val own = it is Stroke || (it is Fill && !it.under)
+            if (sweep != null && own != clipped) {
+                if (own) { c.save(); c.clipOutPath(sweep) } else c.restore()
+                clipped = own
+            }
             when (it) {
                 is ImageItem -> {
                     val ih = itemHr[it.id]
@@ -414,6 +424,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 is Fill -> if (!it.under && visible(it.bounds, 0f, vis)) { fillP.color = it.color; c.drawPath(it.path, fillP) }
             }
         }
+        if (clipped) c.restore()
         if (act == PenAct.DRAW && cur.n >= 2) drawCurrent(c, curColor, curWidth, minW)
         if (act == PenAct.ERASE && cur.n >= 2 && !tools.ignoreBackground && eraseCover) drawCurrent(c, d.bgColor, eraseWidthPt, minW)
         c.restore()
@@ -964,7 +975,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
             val col = Pal.PENS[tools.pen]
             if (old.color != col) {
                 d.pushUndo()
-                d.items = d.items.toMutableList().also { it[hitIdx] = Fill(col, old.polys, old.under) }
+                d.items = d.items.toMutableList().also { it[hitIdx] = Fill(col, old.polys, old.under, old.evenOdd) }
                 d.dirty = true
                 host.onDocEdited()
                 invalidate()
@@ -1247,6 +1258,7 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         act = PenAct.ERASE
         eraseCover = !tools.ignoreBackground
         itemsBeforeErase = d.items
+        eraseSweep = Path()
         d.pushUndo()
         cur.clear(); cur.add(dx, dy)
         eraseWidthPt = eraserPx() / scaleOf(d)
@@ -1254,8 +1266,19 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
         applyErase(d, dx, dy, dx, dy)
     }
 
+    /**
+     * Radierspur als eine Fläche (laufend vereinigt). Während des Radierens wird nur ausgeblendet,
+     * geschnitten wird einmal beim Abheben – flüssig auch bei vielen oder langen Elementen.
+     */
+    private var eraseSweep: Path? = null
+
     private fun applyErase(d: PageDoc, ax: Float, ay: Float, bx: Float, by: Float) {
-        Geo.erase(d.items, ax, ay, bx, by, eraseWidthPt / 2f)?.let { d.items = it }
+        val sw = eraseSweep ?: return
+        val cap = Geo.capsulePath(ax, ay, bx, by, eraseWidthPt / 2f)
+        if (sw.isEmpty) sw.set(cap) else {
+            val u = Path()
+            if (u.op(sw, cap, Path.Op.UNION)) sw.set(u) else sw.addPath(cap)
+        }
     }
 
     private fun penMove(d: PageDoc, e: MotionEvent) {
@@ -1372,6 +1395,8 @@ class CanvasView(ctx: Context, private val tools: ToolState, private val host: H
                 }
             }
             PenAct.ERASE -> {
+                eraseSweep?.let { sw -> if (!sw.isEmpty) Geo.cutWithSweep(d.items, sw)?.let { d.items = it } }
+                eraseSweep = null
                 if (eraseCover) {
                     d.items = d.items + Cover(d.bgColor, eraseWidthPt, cur.toArray())
                     d.dirty = true

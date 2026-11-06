@@ -205,7 +205,7 @@ object PdfIO {
                 if (unders.isNotEmpty()) {
                     PDPageContentStream(pd, page, PDPageContentStream.AppendMode.PREPEND, true, false).use { cs ->
                         cs.beginMarkedContent(COSName.getPDFName(UNDER_MARK))
-                        for (f in unders) fillPolys(cs, (f as Fill).polys, f.color, H)
+                        for (f in unders) fillPolys(cs, (f as Fill).polys, f.color, H, f.evenOdd)
                         cs.endMarkedContent()
                     }
                     val bytes = firstContent(page)?.createInputStream()?.use { it.readBytes() }
@@ -245,7 +245,7 @@ object PdfIO {
                                         if (it.re) dot(cs, p[n - 2], p[n - 1], it.width / 2f, it.color, H)
                                     }
                                     is Cover -> polyline(cs, it.pts, it.width, it.color, H)
-                                    is Fill -> fillPolys(cs, it.polys, it.color, H)
+                                    is Fill -> fillPolys(cs, it.polys, it.color, H, it.evenOdd)
                                     else -> {}
                                 }
                             }
@@ -316,7 +316,7 @@ object PdfIO {
         cs.fill()
     }
 
-    private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float) {
+    private fun fillPolys(cs: PDPageContentStream, polys: List<FloatArray>, c: Int, H: Float, eo: Boolean = false) {
         if (polys.isEmpty()) return
         cs.setNonStrokingColor(color(c))
         for (p in polys) {
@@ -326,7 +326,7 @@ object PdfIO {
             while (i + 1 < p.size) { cs.lineTo(p[i], H - p[i + 1]); i += 2 }
             cs.closePath()
         }
-        cs.fill()
+        if (eo) cs.fillEvenOdd() else cs.fill()
     }
 
     private fun drawImageItem(pd: PDDocument, cs: PDPageContentStream, im: ImageItem, H: Float, dpi: Int, keep: MutableList<PDDocument>) {

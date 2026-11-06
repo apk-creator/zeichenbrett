@@ -90,11 +90,11 @@ class Cover(val color: Int, val width: Float, val pts: FloatArray) : Item() {
  * under = true: liegt unter der Hintergrund-PDF (deren Linien und Text bleiben darüber sichtbar),
  * sonst über dem Hintergrund in der normalen Reihenfolge.
  */
-class Fill(val color: Int, val polys: List<FloatArray>, val under: Boolean = false) : Item() {
+class Fill(val color: Int, val polys: List<FloatArray>, val under: Boolean = false, val evenOdd: Boolean = false) : Item() {
     val bounds: RectF = RectF().also { r -> polys.forEachIndexed { i, p -> if (i == 0) r.set(boundsOf(p)) else r.union(boundsOf(p)) } }
     val path: Path by lazy {
         Path().also { path ->
-            path.fillType = Path.FillType.WINDING
+            path.fillType = if (evenOdd) Path.FillType.EVEN_ODD else Path.FillType.WINDING
             for (p in polys) { path.addPath(pathOf(p)); path.close() }
         }
     }
